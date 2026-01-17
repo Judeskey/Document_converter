@@ -1,2 +1,2 @@
-# Document_converter
+# document_converter
 Convert document from one format to another
