@@ -1,96 +1,94 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 
-export const runtime = "nodejs";
-
 const VISITOR_COOKIE = "dc_vid";
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
 
-async function getVisitorId() {
-    const store = await cookies(); // ✅ await in Next 16.1+
-    let vid = store.get(VISITOR_COOKIE)?.value;
+// Get or create the cookie value (Visitor.dcVid)
+async function getOrSetDcVid(): Promise<string> {
+    const store = await cookies(); // typed as Promise<ReadonlyRequestCookies> in your build
+    let dcVid = store.get(VISITOR_COOKIE)?.value;
 
-    if (!vid) {
-        vid = crypto.randomUUID();
+    if (!dcVid) {
+        dcVid = crypto.randomUUID();
+        store.set(VISITOR_COOKIE, dcVid, {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: process.env.NODE_ENV === "production",
+            path: "/",
+            maxAge: 60 * 60 * 24 * 365, // 1 year
+        });
     }
 
-    return { vid, store, isNew: !store.get(VISITOR_COOKIE) };
+    return dcVid;
 }
 
-export async function GET(
-    req: Request,
-    ctx: { params: Promise<{ tool: string }> } // ✅ params is a Promise
-) {
-    const { tool } = await ctx.params; // ✅ await params
-    const { vid, store, isNew } = await getVisitorId();
+// Ensure Visitor row exists and return its DB id (Visitor.id)
+async function ensureVisitor(): Promise<{ id: string; dcVid: string }> {
+    const dcVid = await getOrSetDcVid();
 
-    // Ensure visitor row exists
-    await prisma.visitor.upsert({
-        where: { id: vid },
+    const visitor = await prisma.visitor.upsert({
+        where: { dcVid },          // ✅ dcVid is @unique
         update: {},
-        create: { id: vid },
+        create: { dcVid },         // ✅ dcVid is required
+        select: { id: true, dcVid: true },
     });
+
+    return visitor;
+}
+
+/**
+ * GET → check if free use remains for this tool
+ */
+export async function GET(
+    _req: NextRequest,
+    context: { params: Promise<{ tool: string }> }
+) {
+    const { tool } = await context.params;
+    const visitor = await ensureVisitor();
 
     const used = await prisma.toolUsage.findUnique({
-        where: { visitorId_tool: { visitorId: vid, tool } },
+        where: {
+            visitorId_tool: { visitorId: visitor.id, tool }, // ✅ FK uses Visitor.id
+        },
     });
 
-    const res = NextResponse.json(
-        {
-            tool,
-            freeUsed: !!used,
-            freeRemaining: used ? 0 : 1,
-        },
-        { status: 200, headers: { "Cache-Control": "no-store" } }
+    return NextResponse.json(
+        { tool, freeUsed: !!used, freeRemaining: used ? 0 : 1 },
+        { headers: { "Cache-Control": "no-store" } }
     );
-
-    // Set cookie if new
-    if (isNew) {
-        res.cookies.set(VISITOR_COOKIE, vid, {
-            path: "/",
-            maxAge: COOKIE_MAX_AGE,
-            sameSite: "lax",
-        });
-    }
-
-    return res;
 }
 
+/**
+ * POST → consume free use (ONLY after successful conversion)
+ */
 export async function POST(
-    req: Request,
-    ctx: { params: Promise<{ tool: string }> }
+    _req: NextRequest,
+    context: { params: Promise<{ tool: string }> }
 ) {
-    const { tool } = await ctx.params;
-    const { vid, isNew } = await getVisitorId();
+    const { tool } = await context.params;
+    const visitor = await ensureVisitor();
 
-    // Ensure visitor row exists
-    await prisma.visitor.upsert({
-        where: { id: vid },
-        update: {},
-        create: { id: vid },
+    const used = await prisma.toolUsage.findUnique({
+        where: {
+            visitorId_tool: { visitorId: visitor.id, tool },
+        },
     });
 
-    // Mark free used (idempotent)
-    await prisma.toolUsage.upsert({
-        where: { visitorId_tool: { visitorId: vid, tool } },
-        update: {},
-        create: { visitorId: vid, tool },
-    });
-
-    const res = NextResponse.json(
-        { ok: true, tool },
-        { status: 200, headers: { "Cache-Control": "no-store" } }
-    );
-
-    if (isNew) {
-        res.cookies.set(VISITOR_COOKIE, vid, {
-            path: "/",
-            maxAge: COOKIE_MAX_AGE,
-            sameSite: "lax",
-        });
+    if (used) {
+        return NextResponse.json(
+            { error: "Free use exhausted. Please subscribe." },
+            { status: 402, headers: { "Cache-Control": "no-store" } }
+        );
     }
 
-    return res;
+    await prisma.toolUsage.create({
+        data: { visitorId: visitor.id, tool },
+    });
+
+    return NextResponse.json(
+        { ok: true, consumed: true },
+        { headers: { "Cache-Control": "no-store" } }
+    );
 }
