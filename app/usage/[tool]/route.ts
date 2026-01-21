@@ -29,9 +29,9 @@ function getVisitorId() {
  */
 export async function GET(
     _req: NextRequest,
-    { params }: { params: { tool: string } }
+    context: { params: Promise<{ tool: string }> }
 ) {
-    const tool = params.tool;
+    const { tool } = await context.params;
     const vid = getVisitorId();
 
     // ensure visitor exists
@@ -58,9 +58,9 @@ export async function GET(
  */
 export async function POST(
     _req: NextRequest,
-    { params }: { params: { tool: string } }
+    context: { params: Promise<{ tool: string }> }
 ) {
-    const tool = params.tool;
+    const { tool } = await context.params;
     const vid = getVisitorId();
 
     const used = await prisma.toolUsage.findUnique({
