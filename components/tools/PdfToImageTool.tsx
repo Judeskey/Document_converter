@@ -1,15 +1,16 @@
 "use client";
 
 import JSZip from "jszip";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
+import * as pdfjs from "pdfjs-dist";
 import { useMemo, useState, useCallback } from "react";
 import { PDFDocument } from "pdf-lib";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
 
-// ✅ Use public worker file (recommended for Next.js)
-// Put this file at: /public/pdf.worker.min.mjs
+// ✅ Public worker file for Next.js
+// Ensure this exists: /public/pdf.worker.min.mjs
 let pdfWorkerReady = false;
+
 async function ensurePdfWorker() {
     if (pdfWorkerReady) return;
     if (typeof window === "undefined") return;
@@ -17,9 +18,17 @@ async function ensurePdfWorker() {
     const workerUrl = "/pdf.worker.min.mjs";
     (pdfjs as any).GlobalWorkerOptions.workerSrc = workerUrl;
 
-    // verify reachable (helps avoid silent failures)
-    const res = await fetch(workerUrl, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Worker fetch failed: ${res.status} ${res.statusText}`);
+    // Verify reachable (helps avoid silent failures)
+    try {
+        const res = await fetch(workerUrl, { cache: "no-store" });
+        if (!res.ok) throw new Error(`Worker fetch failed: ${res.status} ${res.statusText}`);
+    } catch (e) {
+        // If the worker fetch fails, PDF.js can behave unpredictably.
+        // We surface a clear error for the user.
+        throw new Error(
+            "PDF worker is not reachable. Make sure /public/pdf.worker.min.mjs exists and is deployed."
+        );
+    }
 
     pdfWorkerReady = true;
 }
@@ -107,12 +116,14 @@ export default function PdfToImageTool() {
             await ensurePdfWorker();
 
             const bytes = new Uint8Array(await p2iFile.arrayBuffer());
-            const doc = await (pdfjs as any).getDocument({
-                data: bytes,
-                disableAutoFetch: true,
-                disableStream: true,
-                stopAtErrors: false,
-            }).promise;
+            const doc = await (pdfjs as any)
+                .getDocument({
+                    data: bytes,
+                    disableAutoFetch: true,
+                    disableStream: true,
+                    stopAtErrors: false,
+                })
+                .promise;
 
             const total = doc.numPages as number;
 
@@ -138,7 +149,7 @@ export default function PdfToImageTool() {
                 canvas.width = Math.ceil(viewport.width);
                 canvas.height = Math.ceil(viewport.height);
 
-                // white background for JPG + consistent output
+                // White background for JPG + consistent output
                 ctx.fillStyle = "#ffffff";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -218,7 +229,6 @@ export default function PdfToImageTool() {
             icon="🧾"
         >
             <div className="grid gap-4">
-                {/* ✅ UploadCard must receive onPick/onClear or it will crash */}
                 <UploadCard
                     title="Upload a PDF"
                     subtitle="Drag & drop a PDF here, or click to choose."

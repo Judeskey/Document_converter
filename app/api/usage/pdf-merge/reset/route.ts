@@ -9,35 +9,40 @@ const TOOL_ID = "pdf-merge";
 const VISITOR_COOKIE = "dc_vid";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
 
-async function getVisitorId() {
+async function getOrSetDcVid() {
     const store = await cookies(); // ✅ await in Next 16.1+
-    let vid = store.get(VISITOR_COOKIE)?.value;
+    const existing = store.get(VISITOR_COOKIE)?.value;
+    let dcVid = existing;
 
-    if (!vid) {
-        vid = crypto.randomUUID();
+    if (!dcVid) {
+        dcVid = crypto.randomUUID();
     }
 
-    return { vid, store, isNew: !store.get(VISITOR_COOKIE) };
+    return { dcVid, store, isNew: !existing };
 }
 
 export async function POST() {
     // ✅ DEV-ONLY guard
     if (process.env.NODE_ENV === "production") {
-        return NextResponse.json({ error: "Not available in production." }, { status: 403 });
+        return NextResponse.json(
+            { error: "Not available in production." },
+            { status: 403 }
+        );
     }
 
-    const { vid, store, isNew } = await getVisitorId();
+    const { dcVid, store, isNew } = await getOrSetDcVid();
 
-    // Ensure visitor row exists (same as your usage route)
-    await prisma.visitor.upsert({
-        where: { id: vid },
+    // ✅ Ensure visitor row exists (Visitor.dcVid is required + unique)
+    const visitor = await prisma.visitor.upsert({
+        where: { dcVid },
         update: {},
-        create: { id: vid },
+        create: { dcVid },
+        select: { id: true },
     });
 
-    // Reset usage for this tool + visitor
+    // ✅ Reset usage for this tool + visitor (ToolUsage.visitorId references Visitor.id)
     await prisma.toolUsage.deleteMany({
-        where: { visitorId: vid, tool: TOOL_ID },
+        where: { visitorId: visitor.id, tool: TOOL_ID },
     });
 
     // Return the same “fresh” shape your GET computes (freeRemaining: 1 when not used)
@@ -52,10 +57,12 @@ export async function POST() {
 
     // Set cookie if new (same behavior as your usage route)
     if (isNew) {
-        res.cookies.set(VISITOR_COOKIE, vid, {
+        res.cookies.set(VISITOR_COOKIE, dcVid, {
             path: "/",
             maxAge: COOKIE_MAX_AGE,
             sameSite: "lax",
+            httpOnly: true,
+            secure: false,
         });
     }
 

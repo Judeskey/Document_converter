@@ -1,15 +1,18 @@
 import ToolShell from "@/components/ToolShell";
 import ToolPageHeader from "@/components/ToolPageHeader";
-import PdfCompressTool from "@/components/tools/PdfCompressTool";
+import ClientOnly from "./ClientOnly";
+
+// ✅ Prevent static prerender (keeps it from trying to prerender at build time)
+export const dynamic = "force-dynamic";
 
 export default function Page() {
     return (
         <ToolShell>
             <ToolPageHeader
-                title="Compress PDF"
-                description="Reduce PDF size to meet upload limits."
+                title="PDF Compress"
+                description="Reduce PDF size with lossless or strong compression."
             />
-            <PdfCompressTool />
+            <ClientOnly />
         </ToolShell>
     );
 }

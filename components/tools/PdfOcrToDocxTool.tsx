@@ -2,11 +2,13 @@
 
 import { useMemo, useState, useCallback, useEffect } from "react";
 import Link from "next/link";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
+import * as pdfjs from "pdfjs-dist";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
 import { saveAs } from "file-saver";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
+
+
 
 type Mode = "first" | "range" | "all";
 
@@ -403,7 +405,8 @@ export default function PdfOcrToDocxTool() {
             const worker = await Tesseract.createWorker(lang);
 
             if (worker.setParameters) {
-                await worker.setParameters({ tessedit_pageseg_mode: "1" });
+                await worker.setParameters({ tessedit_pageseg_mode: 1 as any });
+
             }
 
             const scale = dpiNum / 72;
@@ -437,7 +440,7 @@ export default function PdfOcrToDocxTool() {
 
                 setPageProgress(95);
 
-                const paras = linesToParagraphs(result?.data?.lines || []);
+                const paras = linesToParagraphs((result as any)?.data?.lines || []);
                 const fallback = cleanText(result?.data?.text || "");
                 const finalParas = paras.length ? paras : fallback ? fallback.split("\n\n") : [];
 

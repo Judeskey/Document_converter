@@ -15,14 +15,12 @@ import {
     WidthType,
 } from "docx";
 import { saveAs } from "file-saver";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
+import * as pdfjs from "pdfjs-dist";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
 
-(pdfjs as any).GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/legacy/build/pdf.worker.mjs",
-    import.meta.url
-).toString();
+(pdfjs as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
 
 type ListKind = "bullet" | "numbered" | null;
 
@@ -361,7 +359,7 @@ export default function PdfToDocTool() {
                     const listText = listKind ? stripListMarker(line) : line;
 
                     // Heading inference
-                    let heading: HeadingLevel | null = null;
+                    let heading: (typeof HeadingLevel)[keyof typeof HeadingLevel] | null = null;
                     if (med > 0) {
                         if (fs >= med * 1.8 && isShort(line)) heading = HeadingLevel.HEADING_1;
                         else if (fs >= med * 1.45 && isShort(line)) heading = HeadingLevel.HEADING_2;
