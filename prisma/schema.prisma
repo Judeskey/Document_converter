@@ -1,0 +1,120 @@
+generator client {
+  provider   = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+}
+
+
+/**
+ * Anonymous “user” identity (cookie-based).
+ * If later you add real auth users, you can link them here.
+ */
+model Visitor {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Persistent visitor cookie value (dc_vid). Set once and reused across tools.
+  dcVid     String  @unique
+
+  // Optional link to a real authenticated user (added when user signs in)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Keep your existing relation name so you don't break the current system
+  usages    ToolUsage[]
+}
+
+
+/**
+ * Tracks “free once per tool”
+ * One record per (visitorId, tool).
+ */
+model ToolUsage {
+  id        String   @id @default(uuid())
+  visitorId String
+  tool      String
+  usedAt    DateTime @default(now())
+
+  visitor Visitor @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+
+  @@unique([visitorId, tool])
+  @@index([tool])
+}
+
+/**
+ * Ads: controlled, safe, layout-stable
+ */
+model AdCampaign {
+  id         String    @id @default(uuid())
+  title      String
+  imageUrl   String
+  clickUrl   String
+  advertiser String?
+  isActive   Boolean   @default(true)
+  startsAt   DateTime?
+  endsAt     DateTime?
+  priority   Int       @default(0) // higher = more likely
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  placements AdPlacement[]
+}
+
+model AdPlacement {
+  id         String   @id @default(uuid())
+  campaignId String
+  slot       String // e.g. "home_top", "tool_sidebar", "tool_bottom"
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  campaign AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([slot, isActive])
+}
+model User {
+  id            String   @id @default(cuid())
+  name          String?
+  email         String?  @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  visitors      Visitor[]  // <- link to dc_vid (we’ll add this)
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
