@@ -1,15 +1,8 @@
-import ToolShell from "@/components/ToolShell";
-import ToolPageHeader from "@/components/ToolPageHeader";
-import PdfToDocTool from "@/components/tools/PdfToDocTool";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+import ClientPage from "./ClientPage";
 
 export default function Page() {
-    return (
-        <ToolShell>
-            <ToolPageHeader
-                title="PDF to Word"
-                description="Convert text-based PDFs into a DOCX file."
-            />
-            <PdfToDocTool />
-        </ToolShell>
-    );
+    return <ClientPage />;
 }

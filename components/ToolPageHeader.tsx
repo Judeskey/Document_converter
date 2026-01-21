@@ -1,37 +1,36 @@
 import Link from "next/link";
 
-export default function ToolPageHeader({
-    title,
-    description,
-}: {
+type Props = {
     title: string;
     description?: string;
-}) {
+};
+
+export default function ToolPageHeader({ title, description }: Props) {
     return (
         <header className="mb-6">
             <div className="flex items-start justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">{title}</h1>
+                    <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                        {title}
+                    </h1>
                     {description ? (
-                        <p className="mt-2 text-sm sm:text-base text-gray-600">{description}</p>
+                        <p className="mt-2 text-sm text-gray-600 sm:text-base">
+                            {description}
+                        </p>
                     ) : null}
                 </div>
 
                 <div className="flex items-center gap-2">
                     <Link
                         href="/tools"
-                        className="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-semibold
-                       bg-indigo-50 text-indigo-700 border border-indigo-200
-                       hover:bg-indigo-100"
+                        className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
                     >
                         All tools
                     </Link>
 
                     <Link
                         href="/"
-                        className="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-semibold
-                       bg-emerald-50 text-emerald-700 border border-emerald-200
-                       hover:bg-emerald-100"
+                        className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
                     >
                         Home
                     </Link>
