@@ -70,7 +70,9 @@ export async function POST(req: Request) {
                 ? `${base}_split.zip`
                 : `${base}_split_${part - 1}_parts.zip`;
 
-        return new NextResponse(zipBytes, {
+        const body = new Uint8Array(zipBytes);
+
+        return new NextResponse(body, {
             status: 200,
             headers: {
                 "Content-Type": "application/zip",
@@ -78,6 +80,7 @@ export async function POST(req: Request) {
                 "Cache-Control": "no-store",
             },
         });
+
     } catch (err: any) {
         return NextResponse.json(
             { error: "PDF split ZIP failed.", detail: String(err?.message || err) },

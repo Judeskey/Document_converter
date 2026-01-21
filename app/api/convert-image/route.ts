@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import sharp from "sharp";
 
-export const runtime = "nodejs"; // important: sharp requires Node runtime
+export const runtime = "nodejs"; // sharp requires Node runtime
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -20,16 +20,31 @@ export async function POST(req: Request) {
     const out = sanitizeOutExt(String(form.get("out") || ""));
 
     if (!out) {
-      return NextResponse.json({ error: "Invalid output format." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid output format." },
+        { status: 400 }
+      );
     }
+
     if (!file || !(file instanceof File)) {
-      return NextResponse.json({ error: "Missing file." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing file." },
+        { status: 400 }
+      );
     }
+
     if (file.size <= 0) {
-      return NextResponse.json({ error: "Empty file." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Empty file." },
+        { status: 400 }
+      );
     }
+
     if (file.size > MAX_BYTES) {
-      return NextResponse.json({ error: "File too large (max 15MB)." }, { status: 400 });
+      return NextResponse.json(
+        { error: "File too large (max 15MB)." },
+        { status: 400 }
+      );
     }
 
     const inName = file.name || "upload";
@@ -38,7 +53,7 @@ export async function POST(req: Request) {
 
     let pipeline = sharp(buf, { failOn: "none" });
 
-    // output settings (reasonable defaults)
+    // output settings
     if (out === "jpeg") pipeline = pipeline.jpeg({ quality: 85 });
     if (out === "png") pipeline = pipeline.png({ compressionLevel: 9 });
     if (out === "webp") pipeline = pipeline.webp({ quality: 85 });
@@ -49,18 +64,24 @@ export async function POST(req: Request) {
     const outName = `${inBase}.${out === "jpeg" ? "jpg" : out}`;
     const contentType =
       out === "jpeg" ? "image/jpeg" :
-      out === "png" ? "image/png" :
-      out === "webp" ? "image/webp" :
-      "image/avif";
+        out === "png" ? "image/png" :
+          out === "webp" ? "image/webp" :
+            "image/avif";
 
-    return new NextResponse(outBuf, {
+    // ✅ FIX: Buffer → Uint8Array (Next.js 16 compliant)
+
+    const body = new Uint8Array(outBuf);
+
+    return new NextResponse(body, {
       status: 200,
       headers: {
-        "Content-Type": contentType,
+        "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${outName}"`,
         "Cache-Control": "no-store",
       },
     });
+
+
   } catch (err: any) {
     return NextResponse.json(
       { error: "Conversion failed.", detail: String(err?.message || err) },
