@@ -35,12 +35,22 @@ export default function AuthButton() {
     }
 
     return (
-        <button
-            type="button"
-            onClick={() => signIn("google", { callbackUrl: "/" })}
-            className="rounded-full px-4 py-2 text-sm bg-black text-white hover:opacity-90"
-        >
-            Continue with Google
-        </button>
+        <div className="flex items-center gap-3">
+            <button
+                type="button"
+                onClick={() => signIn("google", { callbackUrl: "/" })}
+                className="rounded-full px-4 py-2 text-sm bg-black text-white hover:opacity-90"
+            >
+                Continue with Google
+            </button>
+
+            <button
+                type="button"
+                onClick={() => signIn("facebook", { callbackUrl: "/" })}
+                className="rounded-full px-4 py-2 text-sm bg-[#1877F2] text-white hover:opacity-90"
+            >
+                Continue with Facebook
+            </button>
+        </div>
     );
 }

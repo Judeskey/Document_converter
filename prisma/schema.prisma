@@ -1,46 +1,47 @@
 generator client {
-  provider   = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
+
 datasource db {
   provider = "postgresql"
 }
-
 
 /**
  * Anonymous “user” identity (cookie-based).
  * If later you add real auth users, you can link them here.
  */
 model Visitor {
-  id        String   @id @default(uuid())
+  id        String   @id @default(cuid())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Persistent visitor cookie value (dc_vid). Set once and reused across tools.
-  dcVid     String  @unique
+  dcVid String @unique
 
-  // Optional link to a real authenticated user (added when user signs in)
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  // Keep your existing relation name so you don't break the current system
-  usages    ToolUsage[]
+  toolUsages ToolUsage[] // ✅ add this if missing
+  user       User?       @relation(fields: [userId], references: [id])
+  userId     String?
 }
-
 
 /**
  * Tracks “free once per tool”
  * One record per (visitorId, tool).
  */
 model ToolUsage {
-  id        String   @id @default(uuid())
-  visitorId String
+  id        String   @id @default(cuid())
   tool      String
-  usedAt    DateTime @default(now())
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
-  visitor Visitor @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  visitorId String?
+  visitor   Visitor? @relation(fields: [visitorId], references: [id], onDelete: Cascade)
 
-  @@unique([visitorId, tool])
-  @@index([tool])
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tool, visitorId])
+  @@unique([tool, userId])
 }
 
 /**
@@ -73,15 +74,21 @@ model AdPlacement {
 
   @@index([slot, isActive])
 }
+
 model User {
-  id            String   @id @default(cuid())
-  name          String?
-  email         String?  @unique
-  emailVerified DateTime?
-  image         String?
-  accounts      Account[]
-  sessions      Session[]
-  visitors      Visitor[]  // <- link to dc_vid (we’ll add this)
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  email String? @unique
+  name  String?
+  image String?
+
+  visitors   Visitor[]
+  toolUsages ToolUsage[] // ✅ add this line
+
+  accounts Account[]
+  sessions Session[]
 }
 
 model Account {

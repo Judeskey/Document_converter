@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "crypto";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/prisma"; // or "@/lib/db"
+import { auth } from "@/lib/auth";
 
 const VISITOR_COOKIE = "dc_vid";
 
 // Get or create the cookie value (Visitor.dcVid)
 async function getOrSetDcVid(): Promise<string> {
-    const store = await cookies(); // typed as Promise<ReadonlyRequestCookies> in your build
+    const store = await cookies();
     let dcVid = store.get(VISITOR_COOKIE)?.value;
 
     if (!dcVid) {
@@ -29,13 +30,20 @@ async function ensureVisitor(): Promise<{ id: string; dcVid: string }> {
     const dcVid = await getOrSetDcVid();
 
     const visitor = await prisma.visitor.upsert({
-        where: { dcVid },          // ✅ dcVid is @unique
+        where: { dcVid },
         update: {},
-        create: { dcVid },         // ✅ dcVid is required
+        create: { dcVid },
         select: { id: true, dcVid: true },
     });
 
     return visitor;
+}
+
+function noStoreJson(body: any, init?: { status?: number }) {
+    return NextResponse.json(body, {
+        status: init?.status ?? 200,
+        headers: { "Cache-Control": "no-store" },
+    });
 }
 
 /**
@@ -46,18 +54,41 @@ export async function GET(
     context: { params: Promise<{ tool: string }> }
 ) {
     const { tool } = await context.params;
+
+    // 1) If signed in, key by userId
+    const session = await auth();
+    const userId = (session?.user as any)?.id as string | undefined;
+
+    if (userId) {
+        const row = await prisma.toolUsage.findUnique({
+            where: { tool_userId: { tool, userId } },
+            select: { count: true },
+        });
+
+        const count = row?.count ?? 0;
+        return noStoreJson({
+            tool,
+            count,
+            freeUsed: count >= 1,
+            freeRemaining: count >= 1 ? 0 : 1,
+        });
+    }
+
+    // 2) Otherwise fallback to visitor cookie
     const visitor = await ensureVisitor();
 
-    const used = await prisma.toolUsage.findUnique({
-        where: {
-            visitorId_tool: { visitorId: visitor.id, tool }, // ✅ FK uses Visitor.id
-        },
+    const row = await prisma.toolUsage.findUnique({
+        where: { tool_visitorId: { tool, visitorId: visitor.id } }, // ✅ correct order
+        select: { count: true },
     });
 
-    return NextResponse.json(
-        { tool, freeUsed: !!used, freeRemaining: used ? 0 : 1 },
-        { headers: { "Cache-Control": "no-store" } }
-    );
+    const count = row?.count ?? 0;
+    return noStoreJson({
+        tool,
+        count,
+        freeUsed: count >= 1,
+        freeRemaining: count >= 1 ? 0 : 1,
+    });
 }
 
 /**
@@ -68,27 +99,55 @@ export async function POST(
     context: { params: Promise<{ tool: string }> }
 ) {
     const { tool } = await context.params;
+
+    // 1) If signed in, key by userId
+    const session = await auth();
+    const userId = (session?.user as any)?.id as string | undefined;
+
+    if (userId) {
+        const existing = await prisma.toolUsage.findUnique({
+            where: { tool_userId: { tool, userId } },
+            select: { count: true },
+        });
+
+        if ((existing?.count ?? 0) >= 1) {
+            return noStoreJson(
+                { error: "Free use exhausted. Please subscribe.", tool, count: existing?.count ?? 1 },
+                { status: 402 }
+            );
+        }
+
+        const row = await prisma.toolUsage.upsert({
+            where: { tool_userId: { tool, userId } },
+            update: { count: { increment: 1 } },
+            create: { tool, userId, count: 1 },
+            select: { count: true },
+        });
+
+        return noStoreJson({ ok: true, consumed: true, tool, count: row.count });
+    }
+
+    // 2) Otherwise visitor
     const visitor = await ensureVisitor();
 
-    const used = await prisma.toolUsage.findUnique({
-        where: {
-            visitorId_tool: { visitorId: visitor.id, tool },
-        },
+    const existing = await prisma.toolUsage.findUnique({
+        where: { tool_visitorId: { tool, visitorId: visitor.id } },
+        select: { count: true },
     });
 
-    if (used) {
-        return NextResponse.json(
-            { error: "Free use exhausted. Please subscribe." },
-            { status: 402, headers: { "Cache-Control": "no-store" } }
+    if ((existing?.count ?? 0) >= 1) {
+        return noStoreJson(
+            { error: "Free use exhausted. Please subscribe.", tool, count: existing?.count ?? 1 },
+            { status: 402 }
         );
     }
 
-    await prisma.toolUsage.create({
-        data: { visitorId: visitor.id, tool },
+    const row = await prisma.toolUsage.upsert({
+        where: { tool_visitorId: { tool, visitorId: visitor.id } },
+        update: { count: { increment: 1 } },
+        create: { tool, visitorId: visitor.id, count: 1 },
+        select: { count: true },
     });
 
-    return NextResponse.json(
-        { ok: true, consumed: true },
-        { headers: { "Cache-Control": "no-store" } }
-    );
+    return noStoreJson({ ok: true, consumed: true, tool, count: row.count });
 }
