@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Facebook from "next-auth/providers/facebook";
-import Email from "next-auth/providers/email";
+import Resend from "next-auth/providers/resend";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/db";
 
@@ -20,10 +20,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             clientId: process.env.AUTH_FACEBOOK_ID!,
             clientSecret: process.env.AUTH_FACEBOOK_SECRET!,
         }),
-        Email({
-            server: process.env.EMAIL_SERVER!,
+        Resend({
+            apiKey: process.env.RESEND_API_KEY!,
             from: process.env.EMAIL_FROM!,
-        }),
+        })
+
     ],
 
     callbacks: {
