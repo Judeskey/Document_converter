@@ -83,7 +83,7 @@ model User {
   email String? @unique
   name  String?
   image String?
-
+  emailVerified DateTime?   // ✅ ADD THIS
   visitors   Visitor[]
   toolUsages ToolUsage[] // ✅ add this line
 
