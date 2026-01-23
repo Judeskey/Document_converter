@@ -8,9 +8,13 @@ import { prisma } from "@/lib/db";
 const VISITOR_COOKIE = "dc_vid";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+    
     adapter: PrismaAdapter(prisma),
     session: { strategy: "database" },
-
+    pages: {
+        signIn: "/signin",
+        verifyRequest: "/signin?check-email=1",
+    },
     providers: [
         Google({
             clientId: process.env.AUTH_GOOGLE_ID!,

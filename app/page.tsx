@@ -2,6 +2,7 @@ import Link from "next/link";
 import AuthButton from "@/components/auth/AuthButton";
 
 
+
 type Tool = {
   title: string;
   desc: string;
@@ -76,13 +77,14 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2">
+            
             <Link
               href="/tools"
               className="inline-flex items-center gap-2 rounded-full bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-black"
             >
               View all tools →
             </Link>
-            <AuthButton />
+        
           </div>
         </div>
 
