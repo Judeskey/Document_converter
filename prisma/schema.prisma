@@ -2,93 +2,91 @@ generator client {
   provider = "prisma-client-js"
 }
 
-
 datasource db {
   provider = "postgresql"
 }
 
-/**
- * Anonymous “user” identity (cookie-based).
- * If later you add real auth users, you can link them here.
- */
+/// *
+///  * Anonymous “user” identity (cookie-based).
+///  * If later you add real auth users, you can link them here.
 model Visitor {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  dcVid String @unique
-
-  toolUsages ToolUsage[] // ✅ add this if missing
-  user       User?       @relation(fields: [userId], references: [id])
+  id         String      @id @default(cuid())
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  dcVid      String      @unique
   userId     String?
+  toolUsages ToolUsage[]
+  user       User?       @relation(fields: [userId], references: [id])
 }
 
-/**
- * Tracks “free once per tool”
- * One record per (visitorId, tool).
- */
+/// *
+///  * Tracks “free once per tool”
+///  * One record per (visitorId, tool).
 model ToolUsage {
   id        String   @id @default(cuid())
+  visitorId String?
   tool      String
   count     Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
-
-  visitorId String?
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   visitor   Visitor? @relation(fields: [visitorId], references: [id], onDelete: Cascade)
-
-  userId String?
-  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tool, visitorId])
   @@unique([tool, userId])
 }
 
-/**
- * Ads: controlled, safe, layout-stable
- */
+/// *
+///  * Ads: controlled, safe, layout-stable
 model AdCampaign {
-  id         String    @id @default(uuid())
+  id         String        @id @default(uuid())
   title      String
   imageUrl   String
   clickUrl   String
   advertiser String?
-  isActive   Boolean   @default(true)
+  isActive   Boolean       @default(true)
   startsAt   DateTime?
   endsAt     DateTime?
-  priority   Int       @default(0) // higher = more likely
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-
+  priority   Int           @default(0)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
   placements AdPlacement[]
 }
 
 model AdPlacement {
-  id         String   @id @default(uuid())
+  id         String     @id @default(uuid())
   campaignId String
-  slot       String // e.g. "home_top", "tool_sidebar", "tool_bottom"
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-
-  campaign AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  slot       String
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   @@index([slot, isActive])
 }
 
 model User {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String      @id @default(cuid())
+  name          String?
+  email         String?     @unique
+  image         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  emailVerified DateTime?
 
-  email String? @unique
-  name  String?
-  image String?
-  emailVerified DateTime?   // ✅ ADD THIS
-  visitors   Visitor[]
-  toolUsages ToolUsage[] // ✅ add this line
+  // ✅ Subscription fields
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  stripePriceId        String?
+  stripeStatus         String?  // "active", "trialing", "past_due", "canceled", etc.
+  currentPeriodEnd     DateTime?
+  isPro                Boolean  @default(false)
+  
+  accounts      Account[]
+  sessions      Session[]
+  toolUsages    ToolUsage[]
+  visitors      Visitor[]
 
-  accounts Account[]
-  sessions Session[]
 }
 
 model Account {
@@ -104,8 +102,7 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
 }
