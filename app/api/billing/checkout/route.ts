@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { prisma } from "@/lib/prisma";
-import { auth } from "@/lib/auth"; // must export `auth` from your NextAuth setup
+import { prisma } from "@/lib/db";
+import { auth } from "@/auth"; // must export `auth` from your NextAuth setup
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

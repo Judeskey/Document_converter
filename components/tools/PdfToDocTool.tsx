@@ -1,3 +1,4 @@
+// File: components/tools/PdfToDocTool.tsx
 "use client";
 
 import { useMemo, useState } from "react";
@@ -18,9 +19,10 @@ import { saveAs } from "file-saver";
 import * as pdfjs from "pdfjs-dist";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
+import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
+import { TOOL_IDS } from "@/lib/tools/toolIds";
 
 (pdfjs as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-
 
 type ListKind = "bullet" | "numbered" | null;
 
@@ -31,32 +33,34 @@ type TextItem = {
     height?: number;
 };
 
+type UsageJson = {
+    tool: string;
+    freeUsed: boolean;
+    freeRemaining: number;
+    isPro?: boolean;
+};
+
 function firstFile(input: unknown): File | null {
     if (!input) return null;
 
-    // File[]
     if (Array.isArray(input)) {
         const f = input[0];
         return f instanceof File ? f : null;
     }
 
-    // File
     if (input instanceof File) return input;
 
-    // FileList
     if (typeof FileList !== "undefined" && input instanceof FileList) {
         const f = input.item(0);
         return f ?? null;
     }
 
-    // Change/Drop event: e.target.files
     const maybeFiles = (input as any)?.target?.files;
     if (typeof FileList !== "undefined" && maybeFiles instanceof FileList) {
         const f = maybeFiles.item(0);
         return f ?? null;
     }
 
-    // Some components pass { files: File[] }
     const arr = (input as any)?.files;
     if (Array.isArray(arr) && arr[0] instanceof File) return arr[0];
 
@@ -151,11 +155,72 @@ function makeDocxTable(rows: string[][]) {
     });
 }
 
+async function readErrorMessage(res: Response) {
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+        const j = await res.json().catch(() => null);
+        if ((j as any)?.error) return String((j as any).error);
+        if ((j as any)?.message) return String((j as any).message);
+    }
+    const t = await res.text().catch(() => "");
+    return t || `Request failed (${res.status})`;
+}
+
+/**
+ * Robust PDF load that supports:
+ * - password protected PDFs (asks user to type password)
+ * - "no password given" / PasswordException handling
+ */
+async function loadPdf(bytes: Uint8Array, password: string) {
+    const loadingTask = (pdfjs as any).getDocument({
+        data: bytes,
+        password: password || undefined,
+        disableAutoFetch: true,
+        disableStream: true,
+        stopAtErrors: false,
+    });
+
+    return await new Promise<any>((resolve, reject) => {
+        loadingTask.onPassword = (updatePassword: (p: string) => void, reason: number) => {
+            // reason: 1 = NEED_PASSWORD, 2 = INCORRECT_PASSWORD
+            if (!password) {
+                reject(new Error("This PDF is password-protected. Enter the password below and try again."));
+                return;
+            }
+            if (reason === 2) {
+                reject(new Error("Incorrect PDF password. Please try again."));
+                return;
+            }
+            updatePassword(password);
+        };
+
+        loadingTask.promise
+            .then(resolve)
+            .catch((err: any) => {
+                const msg = String(err?.message || "");
+                if (err?.name === "PasswordException" || /password/i.test(msg)) {
+                    if (password) reject(new Error("Incorrect PDF password. Please try again."));
+                    else reject(new Error("This PDF is password-protected. Enter the password below and try again."));
+                    return;
+                }
+                reject(err);
+            });
+    });
+}
+
 export default function PdfToDocTool() {
     const [file, setFile] = useState<File | null>(null);
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState("");
     const [warning, setWarning] = useState("");
+    const [pdfPassword, setPdfPassword] = useState("");
+
+    // ✅ Canonical ids
+    const TOOL_ID = TOOL_IDS.pdfToDoc; // must match /api/usage/[tool]
+    const TOOL_KEY = TOOL_ID; // pricing hint key aligned with tool id
+
+    const [upgradeRequired, setUpgradeRequired] = useState(false);
+    const [checkoutBusy, setCheckoutBusy] = useState(false);
 
     const [maxPages, setMaxPages] = useState("50");
     const [tryTables, setTryTables] = useState(true);
@@ -166,13 +231,12 @@ export default function PdfToDocTool() {
         return `${file.name} (${kb} KB)`;
     }, [file]);
 
-    const TOOL_ID = "pdf-to-word";
-
-    async function getUsage() {
+    async function getUsage(): Promise<UsageJson> {
         const res = await fetch(`/api/usage/${TOOL_ID}`, {
             method: "GET",
             credentials: "include",
             headers: { Accept: "application/json" },
+            cache: "no-store",
         });
 
         if (!res.ok) {
@@ -180,14 +244,10 @@ export default function PdfToDocTool() {
             throw new Error(text || `Usage check failed (${res.status})`);
         }
 
-        return (await res.json()) as {
-            tool: string;
-            freeUsed: boolean;
-            freeRemaining: number;
-        };
+        return (await res.json()) as UsageJson;
     }
 
-    async function burnUsage() {
+    async function burnUsage(): Promise<void> {
         const res = await fetch(`/api/usage/${TOOL_ID}`, {
             method: "POST",
             credentials: "include",
@@ -198,16 +258,35 @@ export default function PdfToDocTool() {
             const text = await res.text().catch(() => "");
             throw new Error(text || `Usage burn failed (${res.status})`);
         }
+    }
 
-        return (await res.json()) as {
-            tool: string;
-            freeUsed: boolean;
-            freeRemaining: number;
-        };
+    async function startCheckout() {
+        setCheckoutBusy(true);
+        setMsg("");
+        try {
+            const res = await fetch("/api/billing/checkout", { method: "POST" });
+
+            if (res.status === 401) {
+                const cb = encodeURIComponent(window.location.pathname + window.location.search);
+                window.location.href = `/signin?callbackUrl=${cb}`;
+                return;
+            }
+
+            if (!res.ok) throw new Error(await readErrorMessage(res));
+
+            const j = (await res.json().catch(() => null)) as { url?: string } | null;
+            if (!j?.url) throw new Error("Checkout URL not returned.");
+            window.location.href = j.url;
+        } catch (e: any) {
+            setMsg(e?.message || "Unable to start checkout.");
+        } finally {
+            setCheckoutBusy(false);
+        }
     }
 
     async function convert() {
         setMsg("");
+        setUpgradeRequired(false);
         setWarning("");
 
         if (!file) {
@@ -221,13 +300,19 @@ export default function PdfToDocTool() {
             return;
         }
 
-        // ✅ Preflight: check free usage before doing heavy work
-        try {
-            setMsg("Checking free usage...");
-            const usage = await getUsage();
+        // ✅ Preflight: check access before heavy work
+        let usage: UsageJson;
+        let isPro = false;
 
-            if (usage.freeRemaining <= 0) {
-                setMsg("Free usage limit reached. Please upgrade to continue using PDF → Word.");
+        try {
+            setMsg("Checking access...");
+            usage = await getUsage();
+            isPro = Boolean(usage.isPro);
+            const freeRemaining = Number(usage.freeRemaining ?? 0);
+
+            if (!isPro && freeRemaining <= 0) {
+                setUpgradeRequired(true);
+                setMsg("Free usage limit reached.");
                 return;
             }
         } catch (e: any) {
@@ -239,16 +324,16 @@ export default function PdfToDocTool() {
 
         try {
             const bytes = new Uint8Array(await file.arrayBuffer());
-            const pdf = await (pdfjs as any).getDocument({ data: bytes }).promise;
+
+            // ✅ Fix for “No password given” / password-protected PDFs
+            const pdf = await loadPdf(bytes, pdfPassword);
 
             const totalPages: number = pdf.numPages;
             const pagesToRead = Math.min(totalPages, maxP);
 
-            // ✅ Real numbered list config
             const NUMBERING_REF = "num-list";
             const docChildren: (Paragraph | Table)[] = [];
 
-            // Title
             docChildren.push(
                 new Paragraph({
                     children: [new TextRun({ text: `Converted from: ${file.name}`, bold: true })],
@@ -276,7 +361,6 @@ export default function PdfToDocTool() {
                 const pageChars = items.reduce((sum, it) => sum + clean(it.str).length, 0);
                 totalExtractedChars += pageChars;
 
-                // Heuristic: scanned/no selectable text
                 if (pageChars < 15) {
                     docChildren.push(
                         new Paragraph({
@@ -295,11 +379,9 @@ export default function PdfToDocTool() {
                     continue;
                 }
 
-                // Heading detection baseline
                 const sizes = items.map(fontSizeProxy).filter((n) => n > 0);
                 const med = median(sizes);
 
-                // Build lines by Y grouping
                 const withPos = items.map((it) => ({ it, ...getXY(it) }));
                 withPos.sort((a, b) => b.y - a.y || a.x - b.x);
 
@@ -315,7 +397,6 @@ export default function PdfToDocTool() {
                     }
                 }
 
-                // Convert lines to structured line objects
                 const lineObjs = lines
                     .map((ln) => {
                         const sorted = [...ln.items].sort((a, b) => a.x - b.x);
@@ -333,14 +414,13 @@ export default function PdfToDocTool() {
                     })
                     .filter((l) => l.text.length > 0);
 
-                // ✅ Detect simple table blocks: consecutive lines with >=2 columns
                 const tableRows: string[][] = [];
                 let inTable = false;
 
                 const flushTableIfAny = () => {
                     if (tableRows.length >= 2) {
                         docChildren.push(makeDocxTable(tableRows));
-                        docChildren.push(new Paragraph("")); // spacing after table
+                        docChildren.push(new Paragraph(""));
                     } else if (tableRows.length === 1) {
                         docChildren.push(new Paragraph(tableRows[0].join("  ")));
                         docChildren.push(new Paragraph(""));
@@ -358,7 +438,6 @@ export default function PdfToDocTool() {
                     const listKind = inferListKind(line);
                     const listText = listKind ? stripListMarker(line) : line;
 
-                    // Heading inference
                     let heading: (typeof HeadingLevel)[keyof typeof HeadingLevel] | null = null;
                     if (med > 0) {
                         if (fs >= med * 1.8 && isShort(line)) heading = HeadingLevel.HEADING_1;
@@ -368,7 +447,6 @@ export default function PdfToDocTool() {
 
                     const looksLikeTableLine = tryTables && ln.cols.length >= 2 && ln.cols.length <= 6;
 
-                    // If heading/list, it breaks table mode
                     if (heading || listKind) {
                         flushTableIfAny();
 
@@ -393,7 +471,6 @@ export default function PdfToDocTool() {
                             continue;
                         }
 
-                        // ✅ Real numbered list
                         if (listKind === "numbered") {
                             docChildren.push(
                                 new Paragraph({
@@ -405,33 +482,27 @@ export default function PdfToDocTool() {
                         }
                     }
 
-                    // Table block handling
                     if (looksLikeTableLine) {
                         inTable = true;
                         tableRows.push(ln.cols.map(clean));
                         continue;
                     }
 
-                    // leaving table
                     if (inTable) flushTableIfAny();
 
-                    // Normal paragraph
                     docChildren.push(new Paragraph(clean(line)));
                 }
 
-                // End of page flush tables
                 flushTableIfAny();
 
-                // ✅ Page breaks
                 if (p < pagesToRead) {
                     docChildren.push(new Paragraph({ children: [new TextRun("")], pageBreakBefore: true }));
                 }
             }
 
-            // ✅ Automatic scanned warning
             const avgCharsPerPage = totalExtractedChars / Math.max(1, pagesToRead);
             if (avgCharsPerPage < 60) {
-                setWarning("This PDF looks like it may be scanned (very little selectable text). For best results, use OCR.");
+                setWarning("This PDF looks scanned (very little selectable text). For best results, use OCR.");
             }
 
             setMsg("Building DOCX...");
@@ -457,9 +528,9 @@ export default function PdfToDocTool() {
 
             const blob = await Packer.toBlob(doc);
 
-            // ✅ Burn usage only after successful conversion (do not block download if burn fails)
+            // ✅ burn usage only if NOT pro; best-effort
             try {
-                await burnUsage();
+                if (!isPro) await burnUsage();
             } catch (burnErr) {
                 console.error("Usage burn failed:", burnErr);
             }
@@ -493,13 +564,9 @@ export default function PdfToDocTool() {
                     title="Upload a PDF"
                     subtitle="Drag & drop a PDF here, or click to choose"
                     accept="application/pdf,.pdf"
-                    disabled={busy}
+                    disabled={busy || checkoutBusy}
                     valueLabel={file ? file.name : "No PDF selected"}
-                    onPick={(input) => {
-                        const f = firstFile(input);
-                        console.log("UploadCard → resolved file:", f);
-                        setFile(f);
-                    }}
+                    onPick={(input) => setFile(firstFile(input))}
                     onClear={() => setFile(null)}
                 />
 
@@ -512,7 +579,7 @@ export default function PdfToDocTool() {
                                 value={maxPages}
                                 onChange={(e) => setMaxPages(e.target.value)}
                                 inputMode="numeric"
-                                disabled={busy}
+                                disabled={busy || checkoutBusy}
                             />
                             <div className="mt-1 text-xs text-gray-600">1–200 (default 50)</div>
                         </div>
@@ -524,7 +591,7 @@ export default function PdfToDocTool() {
                                     className="h-4 w-4"
                                     checked={tryTables}
                                     onChange={(e) => setTryTables(e.target.checked)}
-                                    disabled={busy}
+                                    disabled={busy || checkoutBusy}
                                 />
                                 <span className="font-semibold">Try basic tables</span>
                             </label>
@@ -537,17 +604,46 @@ export default function PdfToDocTool() {
                         </div>
                     ) : null}
 
+                    <div className="mt-4">
+                        <label className="text-sm font-semibold">Password (only if required)</label>
+                        <input
+                            className="mt-2 w-full rounded-xl border bg-white px-3 py-2 text-sm"
+                            value={pdfPassword}
+                            onChange={(e) => setPdfPassword(e.target.value)}
+                            placeholder="Enter PDF password if locked"
+                            disabled={busy || checkoutBusy}
+                        />
+                        <div className="mt-1 text-xs text-gray-600">
+                            If you see “No password given” or “Password-protected”, paste the password here and convert again.
+                        </div>
+                    </div>
+
                     <button
                         type="button"
                         className="mt-5 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
-                        onClick={() => {
-                            console.log("Convert button clicked. file=", file);
-                            convert();
-                        }}
-                        disabled={!file || busy}
+                        onClick={convert}
+                        disabled={!file || busy || checkoutBusy}
                     >
                         {busy ? "Converting..." : "Convert → DOCX & Download"}
                     </button>
+
+                    {upgradeRequired ? (
+                        <div className="mt-4 rounded-xl border p-4 text-center">
+                            <p className="mb-2 text-sm font-medium">
+                                {TOOL_PRICING_HINTS[TOOL_KEY] ??
+                                    "Free usage for this tool is used up. Upgrade to Pro to continue."}
+                            </p>
+                            <p className="mb-3 text-xs text-gray-600">One Pro subscription unlocks all tools.</p>
+
+                            <button
+                                className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                                onClick={startCheckout}
+                                disabled={checkoutBusy || busy}
+                            >
+                                {checkoutBusy ? "Opening Checkout..." : "Upgrade to Pro"}
+                            </button>
+                        </div>
+                    ) : null}
 
                     {msg ? <div className="mt-3 text-sm text-gray-800">{msg}</div> : null}
                 </div>

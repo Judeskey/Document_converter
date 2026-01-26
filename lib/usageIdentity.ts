@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
-import { auth } from "@/lib/auth";
+import { auth } from "@/auth";
 
 
 export async function getUsageIdentity() {

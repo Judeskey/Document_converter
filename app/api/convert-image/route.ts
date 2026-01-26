@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import sharp from "sharp";
+import { gateToolOrThrow, recordToolUse } from "@/lib/proGate";
 
 export const runtime = "nodejs"; // sharp requires Node runtime
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15MB
+const TOOL_KEY = "image-convert";
 
 function sanitizeOutExt(ext: string) {
   const e = String(ext || "").toLowerCase().trim();
@@ -13,6 +15,12 @@ function sanitizeOutExt(ext: string) {
 }
 
 export async function POST(req: Request) {
+  // ✅ STEP 1: Gate the tool BEFORE doing work
+  const gate = await gateToolOrThrow(TOOL_KEY);
+  if (!gate.allowed) {
+    return new NextResponse(gate.message, { status: gate.status });
+  }
+
   try {
     const form = await req.formData();
 
@@ -53,7 +61,6 @@ export async function POST(req: Request) {
 
     let pipeline = sharp(buf, { failOn: "none" });
 
-    // output settings
     if (out === "jpeg") pipeline = pipeline.jpeg({ quality: 85 });
     if (out === "png") pipeline = pipeline.png({ compressionLevel: 9 });
     if (out === "webp") pipeline = pipeline.webp({ quality: 85 });
@@ -68,20 +75,19 @@ export async function POST(req: Request) {
           out === "webp" ? "image/webp" :
             "image/avif";
 
-    // ✅ FIX: Buffer → Uint8Array (Next.js 16 compliant)
-
     const body = new Uint8Array(outBuf);
+
+    // ✅ STEP 2: Record usage ONLY after successful conversion
+    await recordToolUse(TOOL_KEY);
 
     return new NextResponse(body, {
       status: 200,
       headers: {
-        "Content-Type": "application/zip",
+        "Content-Type": contentType,
         "Content-Disposition": `attachment; filename="${outName}"`,
         "Cache-Control": "no-store",
       },
     });
-
-
   } catch (err: any) {
     return NextResponse.json(
       { error: "Conversion failed.", detail: String(err?.message || err) },

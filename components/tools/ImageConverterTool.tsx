@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback } from "react";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
+import GoProButton from "@/components/GoProButton";
+import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
+import { TOOL_IDS } from "@/lib/tools/toolIds";
 
 type OutFmt = "png" | "jpg" | "webp" | "avif";
 
@@ -10,38 +13,66 @@ type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
+    isPro?: boolean;
 };
 
+async function readErrorMessage(res: Response) {
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+        const j = await res.json().catch(() => null);
+        if (j?.error) return String(j.error);
+        if (j?.message) return String(j.message);
+    }
+    const t = await res.text().catch(() => "");
+    return t || `Request failed (${res.status})`;
+}
+
+async function downloadFromResponse(res: Response, fallbackName: string) {
+    const blob = await res.blob();
+    const cd = res.headers.get("content-disposition") || "";
+    const match = /filename="([^"]+)"/.exec(cd);
+    const filename = match?.[1] || fallbackName;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
 export default function ImageConverterTool() {
+    const TOOL_ID = TOOL_IDS.imageConverter; // ✅ canonical id used by /api/usage/[tool]
+    const TOOL_KEY = TOOL_ID; // ✅ pricing hints key should match canonical tool id
+
     const [file, setFile] = useState<File | null>(null);
     const [out, setOut] = useState<OutFmt>("png");
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<string>("");
 
-    // UI-friendly usage state
-    const [freeUsed, setFreeUsed] = useState<boolean>(false);
+    // ✅ gating/usage UI
+    const [blocked, setBlocked] = useState(false);
+    const [gateBusy, setGateBusy] = useState(false);
     const [freeRemaining, setFreeRemaining] = useState<number>(0);
-
-    const TOOL_ID = "image-converter";
-    const isDev = process.env.NODE_ENV !== "production";
+    const [isPro, setIsPro] = useState<boolean>(false);
 
     function onPick(f: File | null) {
         setFile(f);
         setMsg("");
+        setBlocked(false);
     }
 
-    // UploadCard can send: File | File[] | FileList | input event
+    // UploadCard may send: File | File[] | FileList | input event
     const pickFirstFile = useCallback((input: any): File | null => {
         if (!input) return null;
-
         if (Array.isArray(input)) return input[0] ?? null;
         if (typeof File !== "undefined" && input instanceof File) return input;
         if (typeof FileList !== "undefined" && input instanceof FileList) return input[0] ?? null;
 
-        const maybeFiles = input?.target?.files;
-        if (maybeFiles && typeof FileList !== "undefined" && maybeFiles instanceof FileList) {
-            return maybeFiles[0] ?? null;
-        }
+        const files = input?.target?.files;
+        if (typeof FileList !== "undefined" && files instanceof FileList) return files[0] ?? null;
 
         if (Array.isArray(input?.files)) return input.files[0] ?? null;
 
@@ -70,80 +101,60 @@ export default function ImageConverterTool() {
             cache: "no-store",
         });
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(text || `Usage check failed (${res.status})`);
-        }
-
+        if (!res.ok) throw new Error(await readErrorMessage(res));
         return (await res.json()) as UsageJson;
     }
 
-    async function burnUsage(): Promise<UsageJson> {
+    async function burnUsage(): Promise<void> {
         const res = await fetch(`/api/usage/${TOOL_ID}`, {
             method: "POST",
             credentials: "include",
             headers: { Accept: "application/json" },
         });
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(text || `Usage burn failed (${res.status})`);
-        }
-
-        // Your POST currently returns { ok:true, tool }, but parsing is fine either way.
-        // If it doesn't return freeRemaining, we'll refresh via GET below.
-        const j = await res.json().catch(() => null);
-        if (j && typeof j.freeRemaining === "number" && typeof j.freeUsed === "boolean") {
-            return j as UsageJson;
-        }
-
-        // fallback: re-fetch usage so UI stays correct
-        return await getUsage();
+        if (!res.ok) throw new Error(await readErrorMessage(res));
     }
 
-    async function refreshUsageUI() {
+    async function checkAllowed(): Promise<boolean> {
+        setGateBusy(true);
+        setMsg("");
+        setBlocked(false);
+
         try {
-            const j = await getUsage();
-            setFreeUsed(Boolean(j.freeUsed));
-            setFreeRemaining(Number(j.freeRemaining ?? 0));
-        } catch {
-            // ignore
+            const usage = await getUsage();
+            const pro = Boolean(usage.isPro);
+            const remaining = Number(usage.freeRemaining ?? 0);
+
+            setIsPro(pro);
+            setFreeRemaining(remaining);
+
+            // ✅ allowed if Pro OR remaining > 0
+            if (pro || remaining > 0) return true;
+
+            setBlocked(true);
+            setMsg("Free trial used for this tool. Upgrade to Pro to continue.");
+            return false;
+        } catch (e: any) {
+            setMsg(e?.message || "Unable to check access right now.");
+            return false;
+        } finally {
+            setGateBusy(false);
         }
     }
-
-    // Load per-tool usage on mount
-    useEffect(() => {
-        refreshUsageUI();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
 
     async function convertImage() {
         setMsg("");
+        setBlocked(false);
 
         if (!file) {
             setMsg("Please choose an image file first.");
             return;
         }
 
-        // ✅ Preflight: check free usage before conversion
-        let usage: UsageJson;
-        try {
-            setMsg("Checking free usage...");
-            usage = await getUsage();
-            setFreeUsed(Boolean(usage.freeUsed));
-            setFreeRemaining(Number(usage.freeRemaining ?? 0));
-        } catch (e: any) {
-            setMsg(e?.message || "Unable to check usage right now.");
-            return;
-        }
-
-        if (usage.freeRemaining <= 0) {
-            setMsg("Free usage limit reached. Please upgrade to continue using Image Converter.");
-            return;
-        }
+        const allowed = await checkAllowed();
+        if (!allowed) return;
 
         setBusy(true);
-
         try {
             const form = new FormData();
             form.append("file", file);
@@ -154,35 +165,24 @@ export default function ImageConverterTool() {
                 body: form,
             });
 
-            if (!res.ok) {
-                const j = await res.json().catch(() => null);
-                throw new Error(j?.error || `Convert failed (${res.status})`);
-            }
+            if (!res.ok) throw new Error(await readErrorMessage(res));
 
-            const blob = await res.blob();
+            // ✅ download first (don’t block download if burn fails)
+            await downloadFromResponse(res, `converted.${out}`);
 
-            const cd = res.headers.get("content-disposition") || "";
-            const match = /filename="([^"]+)"/.exec(cd);
-            const filename = match?.[1] || `converted.${out}`;
-
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-
-            // ✅ Burn usage ONLY after success (do not block download if burn fails)
-            try {
-                const burned = await burnUsage();
-                setFreeUsed(Boolean(burned.freeUsed));
-                setFreeRemaining(Number(burned.freeRemaining ?? 0));
-            } catch (burnErr) {
-                console.error("Usage burn failed:", burnErr);
-                // Keep UI consistent anyway
-                await refreshUsageUI();
+            // ✅ burn usage ONLY if not Pro
+            if (!isPro) {
+                try {
+                    await burnUsage();
+                    // refresh UI counters (best-effort)
+                    const u2 = await getUsage().catch(() => null);
+                    if (u2) {
+                        setIsPro(Boolean(u2.isPro));
+                        setFreeRemaining(Number(u2.freeRemaining ?? 0));
+                    }
+                } catch {
+                    // ignore burn failure
+                }
             }
 
             setMsg("Done ✅ Download started.");
@@ -192,41 +192,6 @@ export default function ImageConverterTool() {
             setBusy(false);
         }
     }
-
-    async function resetDevOnly() {
-        if (!isDev) return;
-
-        setMsg("");
-        setBusy(true);
-        try {
-            const res = await fetch(`/api/usage/${TOOL_ID}/reset`, {
-                method: "POST",
-                credentials: "include",
-                headers: { Accept: "application/json" },
-            });
-
-            if (!res.ok) {
-                const text = await res.text().catch(() => "");
-                throw new Error(text || `Reset failed (${res.status})`);
-            }
-
-            const j = (await res.json().catch(() => null)) as UsageJson | null;
-            if (j && typeof j.freeRemaining === "number") {
-                setFreeUsed(Boolean(j.freeUsed));
-                setFreeRemaining(Number(j.freeRemaining ?? 0));
-            } else {
-                await refreshUsageUI();
-            }
-
-            setMsg("Reset done (dev only).");
-        } catch (e: any) {
-            setMsg(e?.message || "Reset error.");
-        } finally {
-            setBusy(false);
-        }
-    }
-
-    const locked = freeRemaining <= 0;
 
     return (
         <ToolCard
@@ -241,7 +206,7 @@ export default function ImageConverterTool() {
                     title="Upload an image"
                     subtitle="Drag & drop an image here, or click to choose."
                     accept="image/*,.png,.jpg,.jpeg,.webp,.avif"
-                    disabled={busy}
+                    disabled={busy || gateBusy}
                     valueLabel={fileLabel}
                     onPick={onUploadPick}
                     onClear={() => onPick(null)}
@@ -254,7 +219,7 @@ export default function ImageConverterTool() {
                             value={out}
                             onChange={(e) => setOut(e.target.value as OutFmt)}
                             className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
-                            disabled={busy}
+                            disabled={busy || gateBusy}
                         >
                             <option value="png">PNG</option>
                             <option value="jpg">JPG</option>
@@ -264,33 +229,41 @@ export default function ImageConverterTool() {
 
                         <button
                             onClick={convertImage}
-                            disabled={busy || locked}
+                            disabled={busy || gateBusy}
                             className="mt-4 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
                         >
-                            {busy ? "Converting..." : locked ? "Locked (upgrade)" : "Convert"}
+                            {busy ? "Converting..." : gateBusy ? "Checking access..." : "Convert"}
                         </button>
+
+                        {/* Optional: show remaining uses for free users */}
+                        {!isPro ? (
+                            <div className="mt-3 text-xs text-gray-600">
+                                Free remaining: <span className="font-semibold">{freeRemaining}</span>
+                            </div>
+                        ) : (
+                            <div className="mt-3 text-xs text-gray-600">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        )}
+
+                        {blocked ? (
+                            <div className="mt-4 rounded-xl border p-4 text-center">
+                                <p className="mb-2 text-sm font-medium">
+                                    {TOOL_PRICING_HINTS[TOOL_KEY] ?? "Upgrade to Pro to unlock unlimited usage."}
+                                </p>
+                                <p className="mb-3 text-xs text-gray-600">One subscription unlocks all tools.</p>
+                                <GoProButton />
+                            </div>
+                        ) : null}
 
                         {msg ? <div className="mt-3 text-sm text-gray-700">{msg}</div> : null}
                     </div>
 
                     <div className="rounded-2xl border bg-white p-5">
-                        <div className="text-sm font-semibold text-gray-900">Usage (this tool)</div>
+                        <div className="text-sm font-semibold text-gray-900">Tip</div>
                         <div className="mt-2 text-sm text-gray-700">
-                            Free used: <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span>
+                            Pro users get unlimited conversions across all tools.
                         </div>
-                        <div className="mt-1 text-sm text-gray-700">
-                            Free remaining: <span className="font-semibold">{freeRemaining}</span>
-                        </div>
-
-                        {isDev ? (
-                            <button
-                                className="mt-3 inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
-                                disabled={busy}
-                                onClick={resetDevOnly}
-                            >
-                                Reset (dev only)
-                            </button>
-                        ) : null}
                     </div>
                 </div>
             </div>

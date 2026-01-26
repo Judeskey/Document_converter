@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "crypto";
-import { prisma } from "@/lib/prisma"; // or "@/lib/db"
-import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/db"; // or "@/lib/db"
+import { auth } from "@/auth";
 
 const VISITOR_COOKIE = "dc_vid";
 

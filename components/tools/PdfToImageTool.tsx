@@ -1,3 +1,4 @@
+// File: components/tools/PdfToImageTool.tsx
 "use client";
 
 import JSZip from "jszip";
@@ -6,6 +7,9 @@ import { useMemo, useState, useCallback } from "react";
 import { PDFDocument } from "pdf-lib";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
+import GoProButton from "@/components/GoProButton";
+import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
+import { TOOL_IDS } from "@/lib/tools/toolIds";
 
 // ✅ Public worker file for Next.js
 // Ensure this exists: /public/pdf.worker.min.mjs
@@ -18,13 +22,10 @@ async function ensurePdfWorker() {
     const workerUrl = "/pdf.worker.min.mjs";
     (pdfjs as any).GlobalWorkerOptions.workerSrc = workerUrl;
 
-    // Verify reachable (helps avoid silent failures)
-    try {
-        const res = await fetch(workerUrl, { cache: "no-store" });
-        if (!res.ok) throw new Error(`Worker fetch failed: ${res.status} ${res.statusText}`);
-    } catch (e) {
-        // If the worker fetch fails, PDF.js can behave unpredictably.
-        // We surface a clear error for the user.
+    // If worker isn't reachable, pdfjs may still work with disableWorker fallback,
+    // but we keep this check to catch missing deployments early.
+    const res = await fetch(workerUrl, { cache: "no-store" });
+    if (!res.ok) {
         throw new Error(
             "PDF worker is not reachable. Make sure /public/pdf.worker.min.mjs exists and is deployed."
         );
@@ -33,18 +34,49 @@ async function ensurePdfWorker() {
     pdfWorkerReady = true;
 }
 
+function pickFirstFile(input: any): File | null {
+    if (!input) return null;
+    if (Array.isArray(input)) return input[0] ?? null;
+    if (input instanceof File) return input;
+    if (input instanceof FileList) return input[0] ?? null;
+    const files = input?.target?.files;
+    if (files instanceof FileList) return files[0] ?? null;
+    return null;
+}
+
+async function readErrorMessage(res: Response) {
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+        const j = await res.json().catch(() => null);
+        if ((j as any)?.error) return String((j as any).error);
+        if ((j as any)?.message) return String((j as any).message);
+    }
+    const t = await res.text().catch(() => "");
+    return t || `Request failed (${res.status})`;
+}
+
+// MVP guardrail
 const MAX_ALL_PAGES = 50;
 
 export default function PdfToImageTool() {
     const [p2iFile, setP2iFile] = useState<File | null>(null);
     const [p2iTotalPages, setP2iTotalPages] = useState<number | null>(null);
 
+    // ✅ restore UI options
     const [p2iMode, setP2iMode] = useState<"first" | "all">("first");
     const [p2iOut, setP2iOut] = useState<"png" | "jpg">("png");
     const [p2iDpi, setP2iDpi] = useState("200");
 
     const [p2iBusy, setP2iBusy] = useState(false);
     const [p2iMsg, setP2iMsg] = useState("");
+
+    // ✅ unified server-truth gating (no crashes)
+    const [blocked, setBlocked] = useState(false);
+    const [gateBusy, setGateBusy] = useState(false);
+
+    // ✅ canonical tool id
+    const TOOL_ID = TOOL_IDS.pdfToImage ?? "pdf-to-image";
+    const TOOL_KEY = TOOL_ID;
 
     const fileLabel = useMemo(() => {
         if (!p2iFile) return "No PDF selected";
@@ -53,28 +85,10 @@ export default function PdfToImageTool() {
         return `${p2iFile.name} (${kb} KB) • Total pages: ${pages}`;
     }, [p2iFile, p2iTotalPages]);
 
-    // UploadCard may pass File | File[] | FileList | input event
-    const pickFirstFile = useCallback((input: any): File | null => {
-        if (!input) return null;
-
-        if (Array.isArray(input)) return input[0] ?? null;
-        if (typeof File !== "undefined" && input instanceof File) return input;
-
-        if (typeof FileList !== "undefined" && input instanceof FileList) return input[0] ?? null;
-
-        const maybeFiles = input?.target?.files;
-        if (maybeFiles && typeof FileList !== "undefined" && maybeFiles instanceof FileList) {
-            return maybeFiles[0] ?? null;
-        }
-
-        if (Array.isArray(input?.files)) return input.files[0] ?? null;
-
-        return null;
-    }, []);
-
     async function onPickPdfToImage(f: File | null) {
         setP2iFile(f);
         setP2iMsg("");
+        setBlocked(false);
         setP2iTotalPages(null);
         setP2iMode("first");
 
@@ -85,25 +99,64 @@ export default function PdfToImageTool() {
             const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
             setP2iTotalPages(doc.getPageCount());
         } catch {
-            setP2iMsg("Could not read the PDF page count (file may be corrupted or locked).");
+            setP2iMsg("Could not read the PDF page count.");
         }
     }
 
-    const onUploadPick = useCallback(
-        (input: any) => {
-            const f = pickFirstFile(input);
-            onPickPdfToImage(f);
-        },
-        [pickFirstFile]
-    );
+    const onUploadPick = useCallback((input: any) => {
+        const f = pickFirstFile(input);
+        onPickPdfToImage(f);
+    }, []);
+
+    /**
+     * ✅ IMPORTANT FIX:
+     * - Do NOT throw (prevents Next.js runtime crash)
+     * - Instead: set blocked + show message + return false
+     */
+    async function checkUsage(): Promise<boolean> {
+        setGateBusy(true);
+        try {
+            const res = await fetch(`/api/usage/${TOOL_ID}`, {
+                method: "POST",
+                credentials: "include",
+                headers: { Accept: "application/json" },
+            });
+
+            if (!res.ok) {
+                const msg = await readErrorMessage(res);
+                setP2iMsg(msg || "Free use exhausted. Please subscribe.");
+                setBlocked(true);
+                return false;
+            }
+
+            const data = (await res.json().catch(() => null)) as any;
+            if (!data?.allowed) {
+                setP2iMsg(data?.message || "Free use exhausted. Please subscribe.");
+                setBlocked(true);
+                return false;
+            }
+
+            return true;
+        } catch (e: any) {
+            setP2iMsg(e?.message || "Usage check failed. Please try again.");
+            // don’t necessarily block forever, but show message
+            return false;
+        } finally {
+            setGateBusy(false);
+        }
+    }
 
     async function convertPdfToImageClient() {
         setP2iMsg("");
+        setBlocked(false);
 
         if (!p2iFile) {
             setP2iMsg("Please choose a PDF first.");
             return;
         }
+
+        const allowed = await checkUsage();
+        if (!allowed) return;
 
         const dpiNum = parseInt(p2iDpi || "200", 10);
         if (!Number.isFinite(dpiNum) || dpiNum < 72 || dpiNum > 300) {
@@ -112,10 +165,13 @@ export default function PdfToImageTool() {
         }
 
         setP2iBusy(true);
+
         try {
             await ensurePdfWorker();
 
             const bytes = new Uint8Array(await p2iFile.arrayBuffer());
+
+            // Use worker mode normally; if worker fails, you’ll see the worker error above
             const doc = await (pdfjs as any)
                 .getDocument({
                     data: bytes,
@@ -127,10 +183,9 @@ export default function PdfToImageTool() {
 
             const total = doc.numPages as number;
 
-            // ✅ MVP guardrail
             if (p2iMode === "all" && total > MAX_ALL_PAGES) {
                 setP2iMsg(
-                    `This PDF has ${total} pages. For MVP we limit “All pages” to ${MAX_ALL_PAGES} pages to avoid slow downloads/crashes. Use “First page only” or split the PDF first.`
+                    `This PDF has ${total} pages. For MVP we limit “All pages” to ${MAX_ALL_PAGES}.`
                 );
                 return;
             }
@@ -149,7 +204,7 @@ export default function PdfToImageTool() {
                 canvas.width = Math.ceil(viewport.width);
                 canvas.height = Math.ceil(viewport.height);
 
-                // White background for JPG + consistent output
+                // white background
                 ctx.fillStyle = "#ffffff";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -158,18 +213,16 @@ export default function PdfToImageTool() {
                 const mime = p2iOut === "png" ? "image/png" : "image/jpeg";
                 const quality = p2iOut === "jpg" ? 0.85 : undefined;
 
-                const blob: Blob = await new Promise((resolve, reject) => {
+                return await new Promise<Blob>((resolve, reject) => {
                     canvas.toBlob(
                         (b) => (b ? resolve(b) : reject(new Error("Failed to create image."))),
                         mime,
                         quality as any
                     );
                 });
-
-                return blob;
             };
 
-            // First page -> single image
+            // ✅ First page download
             if (p2iMode === "first") {
                 const blob = await renderPage(1);
                 const ext = p2iOut === "png" ? "png" : "jpg";
@@ -188,15 +241,14 @@ export default function PdfToImageTool() {
                 return;
             }
 
-            // All pages -> ZIP
+            // ✅ All pages ZIP
             const zip = new JSZip();
             const ext = p2iOut === "png" ? "png" : "jpg";
 
             for (let p = 1; p <= total; p++) {
                 setP2iMsg(`Rendering page ${p} of ${total}...`);
                 const blob = await renderPage(p);
-                const buf = await blob.arrayBuffer();
-                zip.file(`${base}_page_${p}.${ext}`, buf);
+                zip.file(`${base}_page_${p}.${ext}`, await blob.arrayBuffer());
             }
 
             setP2iMsg("Creating ZIP...");
@@ -223,7 +275,7 @@ export default function PdfToImageTool() {
     return (
         <ToolCard
             title="PDF → Image"
-            subtitle="Convert PDF pages into PNG/JPG. First page = single file, All pages = ZIP."
+            subtitle="Convert PDF pages into PNG/JPG (single page or ZIP)."
             badge="High value"
             gradient="from-indigo-500 to-violet-500"
             icon="🧾"
@@ -233,65 +285,82 @@ export default function PdfToImageTool() {
                     title="Upload a PDF"
                     subtitle="Drag & drop a PDF here, or click to choose."
                     accept="application/pdf,.pdf"
-                    disabled={p2iBusy}
+                    disabled={p2iBusy || gateBusy}
                     valueLabel={fileLabel}
                     onPick={onUploadPick}
                     onClear={() => onPickPdfToImage(null)}
                 />
 
                 <div className="rounded-2xl border bg-white p-5">
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    {/* ✅ restored controls */}
+                    <div className="grid gap-4 sm:grid-cols-3">
                         <div>
-                            <label className="text-sm font-semibold text-gray-900">Pages</label>
+                            <label className="text-sm font-semibold">Pages</label>
                             <select
-                                className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                                className="mt-2 w-full rounded-xl border bg-white px-3 py-2 text-sm"
                                 value={p2iMode}
-                                onChange={(e) => setP2iMode(e.target.value as "first" | "all")}
-                                disabled={p2iBusy}
+                                onChange={(e) => setP2iMode(e.target.value as any)}
+                                disabled={p2iBusy || gateBusy}
                             >
                                 <option value="first">First page only</option>
-                                <option value="all">All pages (ZIP)</option>
+                                <option value="all">All pages → ZIP</option>
                             </select>
+                            <div className="mt-1 text-xs text-gray-600">
+                                All pages limited to {MAX_ALL_PAGES} pages.
+                            </div>
                         </div>
 
                         <div>
-                            <label className="text-sm font-semibold text-gray-900">Output</label>
+                            <label className="text-sm font-semibold">Output</label>
                             <select
-                                className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                                className="mt-2 w-full rounded-xl border bg-white px-3 py-2 text-sm"
                                 value={p2iOut}
-                                onChange={(e) => setP2iOut(e.target.value as "png" | "jpg")}
-                                disabled={p2iBusy}
+                                onChange={(e) => setP2iOut(e.target.value as any)}
+                                disabled={p2iBusy || gateBusy}
                             >
                                 <option value="png">PNG</option>
                                 <option value="jpg">JPG</option>
                             </select>
+                            <div className="mt-1 text-xs text-gray-600">PNG = sharper, JPG = smaller</div>
                         </div>
 
                         <div>
-                            <label className="text-sm font-semibold text-gray-900">Quality (DPI)</label>
+                            <label className="text-sm font-semibold">DPI</label>
                             <input
-                                className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                                className="mt-2 w-full rounded-xl border bg-white px-3 py-2 text-sm"
                                 value={p2iDpi}
                                 onChange={(e) => setP2iDpi(e.target.value)}
                                 inputMode="numeric"
-                                placeholder="200"
-                                disabled={p2iBusy}
+                                disabled={p2iBusy || gateBusy}
                             />
-                            <div className="mt-1 text-xs text-gray-600">72–300 recommended</div>
+                            <div className="mt-1 text-xs text-gray-600">72–300 (default 200)</div>
                         </div>
                     </div>
 
                     <button
-                        className="mt-4 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
+                        className="mt-5 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
                         onClick={convertPdfToImageClient}
-                        disabled={p2iBusy}
+                        disabled={!p2iFile || p2iBusy || gateBusy}
                     >
                         {p2iBusy
                             ? "Converting..."
-                            : p2iMode === "all"
-                                ? "Convert All Pages & Download ZIP"
-                                : "Convert First Page & Download"}
+                            : gateBusy
+                                ? "Checking access..."
+                                : p2iMode === "all"
+                                    ? "Convert All Pages & Download ZIP"
+                                    : "Convert First Page & Download"}
                     </button>
+
+                    {/* ✅ blocked panel without crashing */}
+                    {blocked ? (
+                        <div className="mt-4 rounded-xl border p-4 text-center">
+                            <p className="mb-2 text-sm font-medium">
+                                {TOOL_PRICING_HINTS[TOOL_KEY] || "Free use exhausted. Please subscribe to continue."}
+                            </p>
+                            <p className="mb-3 text-xs text-gray-600">One subscription unlocks all tools.</p>
+                            <GoProButton />
+                        </div>
+                    ) : null}
 
                     {p2iMsg ? <div className="mt-3 text-sm text-gray-700">{p2iMsg}</div> : null}
                 </div>

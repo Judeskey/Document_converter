@@ -66,27 +66,30 @@ model AdPlacement {
 }
 
 model User {
-  id            String      @id @default(cuid())
-  name          String?
-  email         String?     @unique
-  image         String?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  email String? @unique
   emailVerified DateTime?
-
-  // ✅ Subscription fields
-  stripeCustomerId     String?  @unique
-  stripeSubscriptionId String?  @unique
-  stripePriceId        String?
-  stripeStatus         String?  // "active", "trialing", "past_due", "canceled", etc.
-  currentPeriodEnd     DateTime?
-  isPro                Boolean  @default(false)
+  name  String?
+  image String?
   
-  accounts      Account[]
-  sessions      Session[]
-  toolUsages    ToolUsage[]
-  visitors      Visitor[]
 
+
+  // ✅ Stripe / Subscription
+  stripeCustomerId       String?     @unique
+  stripeSubscriptionId   String?     @unique
+  stripePriceId          String?
+  stripeCurrentPeriodEnd DateTime?
+  subscriptionStatus     String? // "active" | "trialing" | "past_due" | "canceled" etc
+  plan                   String      @default("FREE") // FREE | PRO
+  // ✅ Back-relations required by Prisma
+  accounts               Account[]
+  sessions               Session[]
+  toolUsages             ToolUsage[]
+
+  visitors Visitor[]
 }
 
 model Account {

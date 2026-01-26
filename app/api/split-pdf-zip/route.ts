@@ -1,17 +1,25 @@
 import { NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
 import JSZip from "jszip";
+import { gateToolOrThrow, recordToolUse } from "@/lib/proGate";
 
 export const runtime = "nodejs";
 
 const MAX_BYTES = 40 * 1024 * 1024; // 40MB
 const MAX_PAGES = 400;
+const TOOL_KEY = "pdf-split";
 
 function clamp(n: number, min: number, max: number) {
     return Math.max(min, Math.min(max, n));
 }
 
 export async function POST(req: Request) {
+    // ✅ STEP 1: Gate BEFORE doing any heavy work
+    const gate = await gateToolOrThrow(TOOL_KEY);
+    if (!gate.allowed) {
+        return new NextResponse(gate.message, { status: gate.status });
+    }
+
     try {
         const form = await req.formData();
 
@@ -23,7 +31,10 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Empty file." }, { status: 400 });
         }
         if (file.size > MAX_BYTES) {
-            return NextResponse.json({ error: "File too large (max 40MB)." }, { status: 400 });
+            return NextResponse.json(
+                { error: "File too large (max 40MB)." },
+                { status: 400 }
+            );
         }
 
         const chunkRaw = parseInt(String(form.get("chunk") || "5"), 10);
@@ -36,7 +47,10 @@ export async function POST(req: Request) {
         const totalPages = srcDoc.getPageCount();
 
         if (totalPages > MAX_PAGES) {
-            return NextResponse.json({ error: `PDF too long (max ${MAX_PAGES} pages).` }, { status: 400 });
+            return NextResponse.json(
+                { error: `PDF too long (max ${MAX_PAGES} pages).` },
+                { status: 400 }
+            );
         }
 
         const chunk = clamp(chunkRaw, 1, totalPages);
@@ -49,7 +63,7 @@ export async function POST(req: Request) {
             const end = Math.min(totalPages, start + chunk - 1);
 
             // indices are 0-based for copyPages
-            const indices = Array.from({ length: end - start + 1 }, (_, i) => (start - 1) + i);
+            const indices = Array.from({ length: end - start + 1 }, (_, i) => start - 1 + i);
 
             const outDoc = await PDFDocument.create();
             const pages = await outDoc.copyPages(srcDoc, indices);
@@ -63,16 +77,17 @@ export async function POST(req: Request) {
             part += 1;
         }
 
-        const zipBytes = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+        const zipBytes = await zip.generateAsync({
+            type: "nodebuffer",
+            compression: "DEFLATE",
+        });
 
-        const zipName =
-            part <= 2
-                ? `${base}_split.zip`
-                : `${base}_split_${part - 1}_parts.zip`;
+        const zipName = part <= 2 ? `${base}_split.zip` : `${base}_split_${part - 1}_parts.zip`;
 
-        const body = new Uint8Array(zipBytes);
+        // ✅ STEP 2: Record usage only after success
+        await recordToolUse(TOOL_KEY);
 
-        return new NextResponse(body, {
+        return new NextResponse(new Uint8Array(zipBytes), {
             status: 200,
             headers: {
                 "Content-Type": "application/zip",
@@ -80,7 +95,6 @@ export async function POST(req: Request) {
                 "Cache-Control": "no-store",
             },
         });
-
     } catch (err: any) {
         return NextResponse.json(
             { error: "PDF split ZIP failed.", detail: String(err?.message || err) },

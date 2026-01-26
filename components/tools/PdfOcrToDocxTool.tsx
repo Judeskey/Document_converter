@@ -7,8 +7,8 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
 import { saveAs } from "file-saver";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
-
-
+import GoProButton from "@/components/GoProButton";
+import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 
 type Mode = "first" | "range" | "all";
 
@@ -16,6 +16,7 @@ type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
+    isPro?: boolean;
 };
 
 const LANGS = [
@@ -75,6 +76,7 @@ function linesToParagraphs(lines: any[]) {
     const heights = cleaned
         .slice(0, Math.min(10, cleaned.length))
         .map((l) => Math.abs(l.y1 - l.y0) || 10);
+
     const medH =
         heights.sort((a, b) => a - b)[Math.floor(heights.length / 2)] || 12;
 
@@ -106,17 +108,16 @@ async function ensurePdfWorker() {
     if (pdfWorkerReady) return;
     if (typeof window === "undefined") return;
 
-    const workerUrl = "/pdf.worker.min.mjs"; // must match public file name
+    const workerUrl = "/pdf.worker.min.mjs";
     (pdfjs as any).GlobalWorkerOptions.workerSrc = workerUrl;
 
+    // If worker isn't reachable, we will still try no-worker fallback later.
     try {
         const res = await fetch(workerUrl, { cache: "no-store" });
-        if (!res.ok) {
-            throw new Error(`Worker fetch failed: ${res.status} ${res.statusText}`);
-        }
+        if (!res.ok) throw new Error(`Worker fetch failed: ${res.status} ${res.statusText}`);
     } catch (err) {
         console.error("PDF worker not reachable:", err);
-        return;
+        // Don't throw here—fallback loadPdfDocument() will try disableWorker.
     }
 
     pdfWorkerReady = true;
@@ -131,8 +132,7 @@ function pickFirstFile(input: any): File | null {
     if (Array.isArray(input)) return input[0] ?? null;
     if (typeof File !== "undefined" && input instanceof File) return input;
 
-    if (typeof FileList !== "undefined" && input instanceof FileList)
-        return input[0] ?? null;
+    if (typeof FileList !== "undefined" && input instanceof FileList) return input[0] ?? null;
 
     const maybeFiles = input?.target?.files;
     if (maybeFiles && typeof FileList !== "undefined" && maybeFiles instanceof FileList) {
@@ -183,6 +183,7 @@ export default function PdfOcrToDocxTool() {
     const [mode, setMode] = useState<Mode>("first");
     const [start, setStart] = useState("1");
     const [end, setEnd] = useState("1");
+    const TOOL_KEY = "pdf-ocr-to-docx";
 
     const [lang, setLang] = useState("eng");
     const [dpi, setDpi] = useState("200");
@@ -197,10 +198,10 @@ export default function PdfOcrToDocxTool() {
     // Usage UI
     const [freeUsed, setFreeUsed] = useState(false);
     const [freeRemaining, setFreeRemaining] = useState(0);
+    const [isPro, setIsPro] = useState(false);
 
-    // Per-tool id
+    // Per-tool id (must match your usage route key)
     const TOOL_ID = "pdf-ocr-to-docx";
-    const isDev = process.env.NODE_ENV !== "production";
 
     async function getUsage(): Promise<UsageJson> {
         const res = await fetch(`/api/usage/${TOOL_ID}`, {
@@ -236,6 +237,7 @@ export default function PdfOcrToDocxTool() {
             const j = await getUsage();
             setFreeUsed(Boolean(j.freeUsed));
             setFreeRemaining(Number(j.freeRemaining ?? 0));
+            setIsPro(Boolean(j.isPro));
         } catch {
             // ignore
         }
@@ -302,32 +304,6 @@ export default function PdfOcrToDocxTool() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    async function resetDevOnly() {
-        if (!isDev) return;
-        setMsg("");
-        setWarn("");
-        setBusy(true);
-        try {
-            const res = await fetch(`/api/usage/${TOOL_ID}/reset`, {
-                method: "POST",
-                credentials: "include",
-                headers: { Accept: "application/json" },
-            });
-
-            if (!res.ok) {
-                const text = await res.text().catch(() => "");
-                throw new Error(text || `Reset failed (${res.status})`);
-            }
-
-            await refreshUsageUI();
-            setMsg("Reset done (dev only).");
-        } catch (e: any) {
-            setWarn(e?.message || "Reset failed.");
-        } finally {
-            setBusy(false);
-        }
-    }
-
     async function runOcr() {
         setMsg("");
         setWarn("");
@@ -339,15 +315,16 @@ export default function PdfOcrToDocxTool() {
             return;
         }
 
-        // ✅ Preflight usage check (block early)
+        // ✅ Preflight usage check (block early, Pro bypass happens via isPro flag)
         try {
-            setMsg("Checking free usage...");
+            setMsg("Checking usage...");
             const usage = await getUsage();
             setFreeUsed(Boolean(usage.freeUsed));
             setFreeRemaining(Number(usage.freeRemaining ?? 0));
+            setIsPro(Boolean(usage.isPro));
 
-            if (usage.freeRemaining <= 0) {
-                setMsg("Free usage limit reached. Please upgrade to continue using OCR PDF → DOCX.");
+            if (!usage.isPro && usage.freeRemaining <= 0) {
+                setMsg("Free usage limit reached. Upgrade to Pro to continue using OCR PDF → DOCX.");
                 return;
             }
         } catch (e: any) {
@@ -404,9 +381,8 @@ export default function PdfOcrToDocxTool() {
             setMsg("Starting OCR engine...");
             const worker = await Tesseract.createWorker(lang);
 
-            if (worker.setParameters) {
-                await worker.setParameters({ tessedit_pageseg_mode: 1 as any });
-
+            if ((worker as any).setParameters) {
+                await (worker as any).setParameters({ tessedit_pageseg_mode: 1 as any });
             }
 
             const scale = dpiNum / 72;
@@ -441,7 +417,7 @@ export default function PdfOcrToDocxTool() {
                 setPageProgress(95);
 
                 const paras = linesToParagraphs((result as any)?.data?.lines || []);
-                const fallback = cleanText(result?.data?.text || "");
+                const fallback = cleanText((result as any)?.data?.text || "");
                 const finalParas = paras.length ? paras : fallback ? fallback.split("\n\n") : [];
 
                 extractedPerPage.push({
@@ -528,6 +504,8 @@ export default function PdfOcrToDocxTool() {
         }
     }
 
+    const locked = !isPro && freeRemaining <= 0;
+
     return (
         <ToolCard
             title="OCR PDF → DOCX"
@@ -549,19 +527,10 @@ export default function PdfOcrToDocxTool() {
                     <div className="mb-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
                         <div className="font-semibold">Usage (this tool)</div>
                         <div className="mt-1 text-xs text-gray-700">
-                            Free used: <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span> • Free remaining:{" "}
+                            Pro: <span className="font-semibold">{isPro ? "Yes" : "No"}</span> • Free used:{" "}
+                            <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span> • Free remaining:{" "}
                             <span className="font-semibold">{freeRemaining}</span>
                         </div>
-                        {isDev ? (
-                            <button
-                                className="mt-2 inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold
-                           bg-gray-900 text-white hover:bg-black disabled:opacity-50"
-                                disabled={busy}
-                                onClick={resetDevOnly}
-                            >
-                                Reset (dev only)
-                            </button>
-                        ) : null}
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -662,9 +631,7 @@ export default function PdfOcrToDocxTool() {
                         <ul className="mt-1 list-disc pl-5">
                             <li>All pages OCR limited to {MAX_ALL_PAGES} pages</li>
                             <li>Range OCR limited to {MAX_RANGE_PAGES} pages</li>
-                            <li>
-                                DPI limited to {MIN_DPI}–{MAX_DPI} for performance
-                            </li>
+                            <li>DPI limited to {MIN_DPI}–{MAX_DPI} for performance</li>
                         </ul>
                         <div className="mt-2">
                             Need more pages? Split first:{" "}
@@ -680,14 +647,24 @@ export default function PdfOcrToDocxTool() {
                         </div>
                     ) : null}
 
+                    {/* Main action */}
                     <button
                         className="mt-5 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
                         onClick={runOcr}
-                        disabled={!file || busy || freeRemaining <= 0}
-                        title={freeRemaining <= 0 ? "Free usage limit reached" : undefined}
+                        disabled={!file || busy || locked}
+                        title={locked ? "Free usage limit reached" : undefined}
                     >
-                        {busy ? "Running OCR..." : freeRemaining <= 0 ? "Locked (upgrade)" : "OCR → DOCX & Download"}
+                        {busy ? "Running OCR..." : locked ? "Locked (upgrade)" : "OCR → DOCX & Download"}
                     </button>
+
+                    {/* Upgrade CTA only when locked */}
+                    {locked ? (
+                        <div className="mt-4 rounded-xl border p-4 text-center">
+                            <p className="mb-2 text-sm font-medium">{TOOL_PRICING_HINTS[TOOL_KEY]}</p>
+                            <p className="mb-3 text-xs text-gray-600">One Pro subscription unlocks all tools.</p>
+                            <GoProButton />
+                        </div>
+                    ) : null}
 
                     {msg ? <div className="mt-3 text-sm text-gray-800">{msg}</div> : null}
                 </div>

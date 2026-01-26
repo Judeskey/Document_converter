@@ -4,13 +4,7 @@ import "./globals.css";
 import Providers from "./providers";
 import SiteHeader from "@/components/SiteHeader";
 import AuthButtons from "@/components/AuthButtons";
-
-
-// ...
-
-<SiteHeader rightSlot={<AuthButtons />} />
-
-
+import GoProButton from "@/components/GoProButton";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -45,7 +39,14 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <Providers>
-          <SiteHeader rightSlot={<AuthButtons variant="header" />} />
+          <SiteHeader
+            rightSlot={
+              <div className="flex items-center gap-3">
+                <GoProButton />
+                <AuthButtons variant="header" />
+              </div>
+            }
+          />
           {children}
         </Providers>
       </body>

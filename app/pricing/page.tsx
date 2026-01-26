@@ -1,24 +1,19 @@
-import GoProButton from "@/components/GoProButton";
+import { Suspense } from "react";
+import PricingClient from "./PricingClient";
 
-export default function PricingPage() {
+export const dynamic = "force-dynamic";
+
+export default function Page() {
     return (
-        <main className="mx-auto max-w-2xl p-6">
-            <h1 className="text-3xl font-bold">DocConvertor Pro</h1>
-            <p className="mt-2 text-gray-600">
-                Unlimited conversions for $9.99 CAD/month.
-            </p>
-
-            <div className="mt-6 rounded-xl border p-5">
-                <ul className="list-disc pl-5 text-gray-700">
-                    <li>Unlimited conversions</li>
-                    <li>No daily limits</li>
-                    <li>Priority processing</li>
-                </ul>
-
-                <div className="mt-5">
-                    <GoProButton />
+        <Suspense
+            fallback={
+                <div className="mx-auto max-w-5xl p-8">
+                    <h1 className="text-3xl font-semibold">Pricing</h1>
+                    <p className="mt-2 text-sm opacity-80">Loading…</p>
                 </div>
-            </div>
-        </main>
+            }
+        >
+            <PricingClient />
+        </Suspense>
     );
 }

@@ -1,16 +1,24 @@
 import { NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
+import { gateToolOrThrow, recordToolUse } from "@/lib/proGate";
 
 export const runtime = "nodejs";
 
 const MAX_BYTES = 40 * 1024 * 1024; // 40MB
 const MAX_PAGES = 400;
+const TOOL_KEY = "pdf-split";
 
 function clamp(n: number, min: number, max: number) {
     return Math.max(min, Math.min(max, n));
 }
 
 export async function POST(req: Request) {
+    // ✅ STEP 1: Gate BEFORE doing any heavy work
+    const gate = await gateToolOrThrow(TOOL_KEY);
+    if (!gate.allowed) {
+        return new NextResponse(gate.message, { status: gate.status });
+    }
+
     try {
         const form = await req.formData();
 
@@ -22,7 +30,10 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Empty file." }, { status: 400 });
         }
         if (file.size > MAX_BYTES) {
-            return NextResponse.json({ error: "File too large (max 40MB)." }, { status: 400 });
+            return NextResponse.json(
+                { error: "File too large (max 40MB)." },
+                { status: 400 }
+            );
         }
 
         const mode = String(form.get("mode") || "range"); // range | page
@@ -34,7 +45,10 @@ export async function POST(req: Request) {
 
         const totalPages = srcDoc.getPageCount();
         if (totalPages > MAX_PAGES) {
-            return NextResponse.json({ error: `PDF too long (max ${MAX_PAGES} pages).` }, { status: 400 });
+            return NextResponse.json(
+                { error: `PDF too long (max ${MAX_PAGES} pages).` },
+                { status: 400 }
+            );
         }
 
         // Convert to 0-based indices
@@ -63,7 +77,10 @@ export async function POST(req: Request) {
                 ? `${baseName}_page_${start + 1}.pdf`
                 : `${baseName}_pages_${start + 1}-${end + 1}.pdf`;
 
-        return new NextResponse(Buffer.from(outBytes), {
+        // ✅ STEP 2: Record usage only after success
+        await recordToolUse(TOOL_KEY);
+
+        return new NextResponse(new Uint8Array(outBytes), {
             status: 200,
             headers: {
                 "Content-Type": "application/pdf",
