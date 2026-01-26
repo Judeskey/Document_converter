@@ -1,83 +1,73 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth"; // must export `auth` from your NextAuth setup
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-function jsonError(status: number, payload: any) {
-    return NextResponse.json(payload, { status });
-}
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-export async function POST(req: Request) {
+
+export async function POST() {
     try {
-        // 1) AUTH
         const session = await auth();
-        if (!session?.user?.email) {
-            return jsonError(401, { error: "Unauthorized" });
+        const email = session?.user?.email;
+
+        if (!email) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        // 2) ENV
-        const missing: string[] = [];
-        const stripeSecret = process.env.STRIPE_SECRET_KEY;
-        const proPriceId = process.env.STRIPE_PRICE_PRO_MONTHLY;
+        const user = await prisma.user.findUnique({ where: { email } });
 
-        if (!stripeSecret) missing.push("STRIPE_SECRET_KEY");
-        if (!proPriceId) missing.push("STRIPE_PRICE_PRO_MONTHLY");
+        if (!user) {
+            return NextResponse.json({ error: "User not found" }, { status: 404 });
+        }
 
-        const appUrl =
-            process.env.NEXT_PUBLIC_APP_URL ||
-            process.env.NEXTAUTH_URL ||
-            "http://localhost:3000";
+        // 1) Ensure Stripe customer exists
+        let customerId = user.stripeCustomerId;
 
-        if (!appUrl) missing.push("NEXT_PUBLIC_APP_URL (or NEXTAUTH_URL)");
+        if (!customerId) {
+            const customer = await stripe.customers.create({
+                email: user.email ?? undefined,
+                name: user.name ?? undefined,
+                metadata: { userId: user.id },
+            });
 
-        if (missing.length) {
-            return jsonError(500, {
-                error: "Missing Stripe env vars",
-                missing,
-                seen: {
-                    STRIPE_SECRET_KEY: !!stripeSecret,
-                    STRIPE_PRICE_PRO_MONTHLY: !!proPriceId,
-                    NEXT_PUBLIC_APP_URL: !!process.env.NEXT_PUBLIC_APP_URL,
-                    NEXTAUTH_URL: !!process.env.NEXTAUTH_URL,
-                },
+            customerId = customer.id;
+
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { stripeCustomerId: customerId },
             });
         }
 
-        // 3) STRIPE INIT (don’t pin apiVersion to avoid TS errors)
-        const stripe = new Stripe(stripeSecret!);
+        // 2) Create Stripe Checkout Session (subscription)
+        const priceId = process.env.STRIPE_PRICE_PRO_MONTHLY!;
+        const baseUrl = process.env.AUTH_URL!; // https://docconvertor.com
 
-        // 4) optional body
-        let country: string | undefined;
-        let province: string | undefined;
-        try {
-            const body = await req.json();
-            country = body?.country;
-            province = body?.province;
-        } catch { }
-
-        // 5) Checkout Session
         const checkout = await stripe.checkout.sessions.create({
             mode: "subscription",
-            customer_email: session.user.email,
-            line_items: [{ price: proPriceId!, quantity: 1 }],
-            success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${appUrl}/billing/cancel`,
-            metadata: {
-                userEmail: session.user.email,
-                country: country || "",
-                province: province || "",
-            },
+            customer: customerId,
+            line_items: [{ price: priceId, quantity: 1 }],
+            allow_promotion_codes: true,
+
+            // Optional: collect billing address
+            billing_address_collection: "auto",
+
+            // Useful metadata
+            metadata: { userId: user.id },
+
+            success_url: `${baseUrl}/account?checkout=success`,
+            cancel_url: `${baseUrl}/pricing?checkout=cancel`,
         });
 
-        return NextResponse.json({ url: checkout.url });
+        return NextResponse.json({ url: checkout.url }, { status: 200 });
     } catch (err: any) {
-        console.error("Checkout error:", err);
-        return jsonError(500, {
-            error: "Checkout failed",
-            message: err?.message ?? String(err),
-            type: err?.type,
-            code: err?.code,
-        });
+        console.error("[billing.checkout] error", err);
+        return NextResponse.json(
+            { error: "Checkout session failed" },
+            { status: 500 }
+        );
     }
 }
