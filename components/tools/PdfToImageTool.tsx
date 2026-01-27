@@ -10,6 +10,7 @@ import UploadCard from "@/components/UploadCard";
 import GoProButton from "@/components/GoProButton";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 import { TOOL_IDS } from "@/lib/tools/toolIds";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 // ✅ Public worker file for Next.js
 // Ensure this exists: /public/pdf.worker.min.mjs
@@ -55,6 +56,12 @@ async function readErrorMessage(res: Response) {
     return t || `Request failed (${res.status})`;
 }
 
+type UsageJson = {
+    tool: string;
+    freeUsed: boolean;
+    freeRemaining: number;
+};
+
 // MVP guardrail
 const MAX_ALL_PAGES = 50;
 
@@ -70,13 +77,17 @@ export default function PdfToImageTool() {
     const [p2iBusy, setP2iBusy] = useState(false);
     const [p2iMsg, setP2iMsg] = useState("");
 
-    // ✅ unified server-truth gating (no crashes)
+    // ✅ gating UI
     const [blocked, setBlocked] = useState(false);
     const [gateBusy, setGateBusy] = useState(false);
 
     // ✅ canonical tool id
     const TOOL_ID = TOOL_IDS.pdfToImage ?? "pdf-to-image";
     const TOOL_KEY = TOOL_ID;
+
+    // ✅ Billing truth (single source)
+    const { billingLoaded, isPro } = useBillingStatus();
+    const pro = billingLoaded && isPro;
 
     const fileLabel = useMemo(() => {
         if (!p2iFile) return "No PDF selected";
@@ -106,40 +117,52 @@ export default function PdfToImageTool() {
     const onUploadPick = useCallback((input: any) => {
         const f = pickFirstFile(input);
         onPickPdfToImage(f);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    /**
-     * ✅ IMPORTANT FIX:
-     * - Do NOT throw (prevents Next.js runtime crash)
-     * - Instead: set blocked + show message + return false
-     */
-    async function checkUsage(): Promise<boolean> {
+    async function getUsage(): Promise<UsageJson> {
+        const res = await fetch(`/api/usage/${TOOL_ID}`, {
+            method: "GET",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+        });
+
+        if (!res.ok) throw new Error(await readErrorMessage(res));
+        return (await res.json()) as UsageJson;
+    }
+
+    async function burnUsage(): Promise<void> {
+        const res = await fetch(`/api/usage/${TOOL_ID}`, {
+            method: "POST",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+        });
+
+        if (!res.ok) throw new Error(await readErrorMessage(res));
+    }
+
+    async function checkAccessFreeOnly(): Promise<boolean> {
+        // ✅ PRO short-circuit: never block, never check usage
+        if (pro) return true;
+
         setGateBusy(true);
+        setP2iMsg("");
+        setBlocked(false);
+
         try {
-            const res = await fetch(`/api/usage/${TOOL_ID}`, {
-                method: "POST",
-                credentials: "include",
-                headers: { Accept: "application/json" },
-            });
+            const usage = await getUsage();
+            const remaining = Number(usage.freeRemaining ?? 0);
 
-            if (!res.ok) {
-                const msg = await readErrorMessage(res);
-                setP2iMsg(msg || "Free use exhausted. Please subscribe.");
-                setBlocked(true);
-                return false;
-            }
+            if (remaining > 0) return true;
 
-            const data = (await res.json().catch(() => null)) as any;
-            if (!data?.allowed) {
-                setP2iMsg(data?.message || "Free use exhausted. Please subscribe.");
-                setBlocked(true);
-                return false;
-            }
-
-            return true;
+            setBlocked(true);
+            setP2iMsg("Free trial used for this tool. Upgrade to Pro to continue.");
+            return false;
         } catch (e: any) {
-            setP2iMsg(e?.message || "Usage check failed. Please try again.");
-            // don’t necessarily block forever, but show message
+            // fail-closed for FREE users (safer)
+            setBlocked(true);
+            setP2iMsg(e?.message || "Unable to check access right now.");
             return false;
         } finally {
             setGateBusy(false);
@@ -155,7 +178,7 @@ export default function PdfToImageTool() {
             return;
         }
 
-        const allowed = await checkUsage();
+        const allowed = await checkAccessFreeOnly();
         if (!allowed) return;
 
         const dpiNum = parseInt(p2iDpi || "200", 10);
@@ -171,7 +194,6 @@ export default function PdfToImageTool() {
 
             const bytes = new Uint8Array(await p2iFile.arrayBuffer());
 
-            // Use worker mode normally; if worker fails, you’ll see the worker error above
             const doc = await (pdfjs as any)
                 .getDocument({
                     data: bytes,
@@ -237,6 +259,15 @@ export default function PdfToImageTool() {
                 a.remove();
                 URL.revokeObjectURL(url);
 
+                // ✅ burn usage ONLY if FREE (best-effort)
+                if (!pro) {
+                    try {
+                        await burnUsage();
+                    } catch {
+                        // ignore burn failure
+                    }
+                }
+
                 setP2iMsg("Done ✅ Image download started.");
                 return;
             }
@@ -263,6 +294,15 @@ export default function PdfToImageTool() {
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
+
+            // ✅ burn usage ONLY if FREE (best-effort)
+            if (!pro) {
+                try {
+                    await burnUsage();
+                } catch {
+                    // ignore burn failure
+                }
+            }
 
             setP2iMsg(`Done ✅ ZIP download started (${total} files).`);
         } catch (e: any) {
@@ -292,6 +332,22 @@ export default function PdfToImageTool() {
                 />
 
                 <div className="rounded-2xl border bg-white p-5">
+                    {/* Optional Access banner (helps debugging) */}
+                    <div className="mb-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
+                        <div className="font-semibold">Access</div>
+                        {!billingLoaded ? (
+                            <div className="mt-1 text-xs text-gray-700">Checking subscription…</div>
+                        ) : pro ? (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        ) : (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">FREE</span> (limited)
+                            </div>
+                        )}
+                    </div>
+
                     {/* ✅ restored controls */}
                     <div className="grid gap-4 sm:grid-cols-3">
                         <div>
@@ -305,9 +361,7 @@ export default function PdfToImageTool() {
                                 <option value="first">First page only</option>
                                 <option value="all">All pages → ZIP</option>
                             </select>
-                            <div className="mt-1 text-xs text-gray-600">
-                                All pages limited to {MAX_ALL_PAGES} pages.
-                            </div>
+                            <div className="mt-1 text-xs text-gray-600">All pages limited to {MAX_ALL_PAGES} pages.</div>
                         </div>
 
                         <div>
@@ -351,8 +405,8 @@ export default function PdfToImageTool() {
                                     : "Convert First Page & Download"}
                     </button>
 
-                    {/* ✅ blocked panel without crashing */}
-                    {blocked ? (
+                    {/* ✅ Upgrade CTA only when blocked AND not PRO */}
+                    {!pro && blocked ? (
                         <div className="mt-4 rounded-xl border p-4 text-center">
                             <p className="mb-2 text-sm font-medium">
                                 {TOOL_PRICING_HINTS[TOOL_KEY] || "Free use exhausted. Please subscribe to continue."}

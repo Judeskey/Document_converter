@@ -1,18 +1,18 @@
 // File: components/tools/PdfMergeTool.tsx
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
 import GoProButton from "@/components/GoProButton";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 import { TOOL_IDS } from "@/lib/tools/toolIds";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
-    isPro?: boolean;
 };
 
 async function readErrorMessage(res: Response) {
@@ -45,15 +45,21 @@ async function downloadFromResponse(res: Response, fallbackName: string) {
 export default function PdfMergeTool() {
     const [pdfFiles, setPdfFiles] = useState<File[]>([]);
     const [pdfBusy, setPdfBusy] = useState(false);
+    const [gateBusy, setGateBusy] = useState(false);
     const [pdfMsg, setPdfMsg] = useState<string>("");
 
     // ✅ Canonical tool id (must match /api/usage/[tool])
     const TOOL_ID = TOOL_IDS.pdfMerge;
-    const TOOL_KEY = TOOL_ID; // pricing hint key (keep consistent with tool id)
+    const TOOL_KEY = TOOL_ID;
 
-    // ✅ unified server-truth gating
+    // ✅ Billing truth (single source of PRO)
+    const { billingLoaded, isPro } = useBillingStatus();
+
+    // ✅ Free-user usage UI
+    const [freeRemaining, setFreeRemaining] = useState(0);
+
+    // ✅ upgrade UI
     const [blocked, setBlocked] = useState(false);
-    const [gateBusy, setGateBusy] = useState(false);
 
     const pdfSummary = useMemo(() => {
         if (!pdfFiles.length) return "No PDFs selected";
@@ -113,11 +119,7 @@ export default function PdfMergeTool() {
             cache: "no-store",
         });
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(text || `Usage check failed (${res.status})`);
-        }
-
+        if (!res.ok) throw new Error(await readErrorMessage(res));
         return (await res.json()) as UsageJson;
     }
 
@@ -128,24 +130,42 @@ export default function PdfMergeTool() {
             headers: { Accept: "application/json" },
         });
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(text || `Usage burn failed (${res.status})`);
+        if (!res.ok) throw new Error(await readErrorMessage(res));
+    }
+
+    async function refreshUsageUI() {
+        // only meaningful for FREE users
+        if (billingLoaded && isPro) return;
+
+        try {
+            const usage = await getUsage();
+            setFreeRemaining(Number(usage.freeRemaining ?? 0));
+        } catch {
+            // ignore
         }
     }
 
-    async function checkAccess(): Promise<boolean> {
+    useEffect(() => {
+        refreshUsageUI();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [billingLoaded, isPro]);
+
+    async function checkAccessForFreeUsers(): Promise<boolean> {
         setGateBusy(true);
+        setPdfMsg("");
+        setBlocked(false);
+
         try {
             const usage = await getUsage();
-            const isPro = Boolean(usage.isPro);
-            const freeRemaining = Number(usage.freeRemaining ?? 0);
+            const remaining = Number(usage.freeRemaining ?? 0);
+            setFreeRemaining(remaining);
 
-            const allowed = isPro || freeRemaining > 0;
-            if (!allowed) setBlocked(true);
-            return allowed;
+            if (remaining > 0) return true;
+
+            setBlocked(true);
+            setPdfMsg("Free trial used for this tool. Upgrade to Pro to continue.");
+            return false;
         } catch (e: any) {
-            // If we can't verify access, fail closed (safer) and show message.
             setPdfMsg(e?.message || "Unable to check access right now.");
             setBlocked(true);
             return false;
@@ -163,8 +183,11 @@ export default function PdfMergeTool() {
             return;
         }
 
-        const allowed = await checkAccess();
-        if (!allowed) return;
+        // ✅ PRO short-circuit: never run usage gating
+        if (!(billingLoaded && isPro)) {
+            const allowed = await checkAccessForFreeUsers();
+            if (!allowed) return;
+        }
 
         setPdfBusy(true);
         try {
@@ -176,12 +199,14 @@ export default function PdfMergeTool() {
 
             await downloadFromResponse(res, "merged.pdf");
 
-            // ✅ Burn ONLY after success (best-effort; do not block UX)
-            try {
-                const usage = await getUsage();
-                if (!usage.isPro) await burnUsage();
-            } catch {
-                // ignore burn errors
+            // ✅ burn usage only if FREE
+            if (!(billingLoaded && isPro)) {
+                try {
+                    await burnUsage();
+                    await refreshUsageUI();
+                } catch {
+                    // ignore burn errors
+                }
             }
 
             setPdfMsg("Merged ✅ Download started.");
@@ -191,6 +216,9 @@ export default function PdfMergeTool() {
             setPdfBusy(false);
         }
     }
+
+    const showPro = billingLoaded && isPro;
+    const showUpgradeCard = billingLoaded && !isPro && blocked;
 
     return (
         <ToolCard
@@ -218,6 +246,23 @@ export default function PdfMergeTool() {
                 <div className="rounded-2xl border bg-white p-5">
                     <div className="text-sm font-semibold text-gray-900">Selected files</div>
                     <div className="mt-1 text-xs text-gray-600">{pdfSummary}</div>
+
+                    {/* ✅ Access panel */}
+                    <div className="mt-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
+                        <div className="font-semibold">Access</div>
+                        {!billingLoaded ? (
+                            <div className="mt-1 text-xs text-gray-700">Checking subscription…</div>
+                        ) : showPro ? (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        ) : (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">FREE</span> • Free remaining:{" "}
+                                <span className="font-semibold">{freeRemaining}</span>
+                            </div>
+                        )}
+                    </div>
 
                     {pdfFiles.length ? (
                         <>
@@ -275,15 +320,17 @@ export default function PdfMergeTool() {
                                 </button>
                             </div>
 
-                            {blocked && (
+                            {/* ✅ Upgrade CTA (FREE only) */}
+                            {showUpgradeCard ? (
                                 <div className="mt-4 rounded-xl border p-4 text-center">
                                     <p className="mb-2 text-sm font-medium">
-                                        {TOOL_PRICING_HINTS[TOOL_KEY] ?? "Free usage for this tool is used up. Upgrade to Pro to continue."}
+                                        {TOOL_PRICING_HINTS[TOOL_KEY] ??
+                                            "Free usage for this tool is used up. Upgrade to Pro to continue."}
                                     </p>
                                     <p className="mb-3 text-xs text-gray-600">One subscription unlocks all tools.</p>
                                     <GoProButton />
                                 </div>
-                            )}
+                            ) : null}
                         </>
                     ) : null}
 

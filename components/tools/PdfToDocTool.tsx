@@ -19,8 +19,10 @@ import { saveAs } from "file-saver";
 import * as pdfjs from "pdfjs-dist";
 import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
+import GoProButton from "@/components/GoProButton";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 import { TOOL_IDS } from "@/lib/tools/toolIds";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 (pdfjs as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
@@ -37,7 +39,6 @@ type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
-    isPro?: boolean;
 };
 
 function firstFile(input: unknown): File | null {
@@ -220,10 +221,13 @@ export default function PdfToDocTool() {
     const TOOL_KEY = TOOL_ID; // pricing hint key aligned with tool id
 
     const [upgradeRequired, setUpgradeRequired] = useState(false);
-    const [checkoutBusy, setCheckoutBusy] = useState(false);
 
     const [maxPages, setMaxPages] = useState("50");
     const [tryTables, setTryTables] = useState(true);
+
+    // ✅ Billing truth (single source)
+    const { billingLoaded, isPro } = useBillingStatus();
+    const pro = billingLoaded && isPro;
 
     const fileLabel = useMemo(() => {
         if (!file) return "No PDF selected";
@@ -260,30 +264,6 @@ export default function PdfToDocTool() {
         }
     }
 
-    async function startCheckout() {
-        setCheckoutBusy(true);
-        setMsg("");
-        try {
-            const res = await fetch("/api/billing/checkout", { method: "POST" });
-
-            if (res.status === 401) {
-                const cb = encodeURIComponent(window.location.pathname + window.location.search);
-                window.location.href = `/signin?callbackUrl=${cb}`;
-                return;
-            }
-
-            if (!res.ok) throw new Error(await readErrorMessage(res));
-
-            const j = (await res.json().catch(() => null)) as { url?: string } | null;
-            if (!j?.url) throw new Error("Checkout URL not returned.");
-            window.location.href = j.url;
-        } catch (e: any) {
-            setMsg(e?.message || "Unable to start checkout.");
-        } finally {
-            setCheckoutBusy(false);
-        }
-    }
-
     async function convert() {
         setMsg("");
         setUpgradeRequired(false);
@@ -300,24 +280,22 @@ export default function PdfToDocTool() {
             return;
         }
 
-        // ✅ Preflight: check access before heavy work
-        let usage: UsageJson;
-        let isPro = false;
+        // ✅ Preflight: FREE users must pass usage check; PRO bypasses
+        if (!pro) {
+            try {
+                setMsg("Checking access...");
+                const usage = await getUsage();
+                const freeRemaining = Number(usage.freeRemaining ?? 0);
 
-        try {
-            setMsg("Checking access...");
-            usage = await getUsage();
-            isPro = Boolean(usage.isPro);
-            const freeRemaining = Number(usage.freeRemaining ?? 0);
-
-            if (!isPro && freeRemaining <= 0) {
-                setUpgradeRequired(true);
-                setMsg("Free usage limit reached.");
+                if (freeRemaining <= 0) {
+                    setUpgradeRequired(true);
+                    setMsg("Free usage limit reached.");
+                    return;
+                }
+            } catch (e: any) {
+                setMsg(e?.message || "Unable to check usage right now.");
                 return;
             }
-        } catch (e: any) {
-            setMsg(e?.message || "Unable to check usage right now.");
-            return;
         }
 
         setBusy(true);
@@ -325,7 +303,7 @@ export default function PdfToDocTool() {
         try {
             const bytes = new Uint8Array(await file.arrayBuffer());
 
-            // ✅ Fix for “No password given” / password-protected PDFs
+            // ✅ Fix for password-protected PDFs
             const pdf = await loadPdf(bytes, pdfPassword);
 
             const totalPages: number = pdf.numPages;
@@ -528,11 +506,13 @@ export default function PdfToDocTool() {
 
             const blob = await Packer.toBlob(doc);
 
-            // ✅ burn usage only if NOT pro; best-effort
-            try {
-                if (!isPro) await burnUsage();
-            } catch (burnErr) {
-                console.error("Usage burn failed:", burnErr);
+            // ✅ Burn usage only for FREE users (best-effort, never block download)
+            if (!pro) {
+                try {
+                    await burnUsage();
+                } catch (burnErr) {
+                    console.error("Usage burn failed:", burnErr);
+                }
             }
 
             const base = file.name.replace(/\.pdf$/i, "");
@@ -564,13 +544,29 @@ export default function PdfToDocTool() {
                     title="Upload a PDF"
                     subtitle="Drag & drop a PDF here, or click to choose"
                     accept="application/pdf,.pdf"
-                    disabled={busy || checkoutBusy}
-                    valueLabel={file ? file.name : "No PDF selected"}
+                    disabled={busy}
+                    valueLabel={fileLabel}
                     onPick={(input) => setFile(firstFile(input))}
                     onClear={() => setFile(null)}
                 />
 
                 <div className="rounded-2xl border bg-white p-5">
+                    {/* Optional Access banner (helps debugging) */}
+                    <div className="mb-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
+                        <div className="font-semibold">Access</div>
+                        {!billingLoaded ? (
+                            <div className="mt-1 text-xs text-gray-700">Checking subscription…</div>
+                        ) : pro ? (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        ) : (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">FREE</span> (limited)
+                            </div>
+                        )}
+                    </div>
+
                     <div className="grid gap-4 sm:grid-cols-2">
                         <div>
                             <label className="text-sm font-semibold">Max pages</label>
@@ -579,7 +575,7 @@ export default function PdfToDocTool() {
                                 value={maxPages}
                                 onChange={(e) => setMaxPages(e.target.value)}
                                 inputMode="numeric"
-                                disabled={busy || checkoutBusy}
+                                disabled={busy}
                             />
                             <div className="mt-1 text-xs text-gray-600">1–200 (default 50)</div>
                         </div>
@@ -591,7 +587,7 @@ export default function PdfToDocTool() {
                                     className="h-4 w-4"
                                     checked={tryTables}
                                     onChange={(e) => setTryTables(e.target.checked)}
-                                    disabled={busy || checkoutBusy}
+                                    disabled={busy}
                                 />
                                 <span className="font-semibold">Try basic tables</span>
                             </label>
@@ -611,7 +607,7 @@ export default function PdfToDocTool() {
                             value={pdfPassword}
                             onChange={(e) => setPdfPassword(e.target.value)}
                             placeholder="Enter PDF password if locked"
-                            disabled={busy || checkoutBusy}
+                            disabled={busy}
                         />
                         <div className="mt-1 text-xs text-gray-600">
                             If you see “No password given” or “Password-protected”, paste the password here and convert again.
@@ -622,26 +618,20 @@ export default function PdfToDocTool() {
                         type="button"
                         className="mt-5 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
                         onClick={convert}
-                        disabled={!file || busy || checkoutBusy}
+                        disabled={!file || busy}
                     >
                         {busy ? "Converting..." : "Convert → DOCX & Download"}
                     </button>
 
-                    {upgradeRequired ? (
+                    {/* ✅ Upgrade CTA only for FREE users who are blocked */}
+                    {!pro && upgradeRequired ? (
                         <div className="mt-4 rounded-xl border p-4 text-center">
                             <p className="mb-2 text-sm font-medium">
                                 {TOOL_PRICING_HINTS[TOOL_KEY] ??
                                     "Free usage for this tool is used up. Upgrade to Pro to continue."}
                             </p>
                             <p className="mb-3 text-xs text-gray-600">One Pro subscription unlocks all tools.</p>
-
-                            <button
-                                className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-                                onClick={startCheckout}
-                                disabled={checkoutBusy || busy}
-                            >
-                                {checkoutBusy ? "Opening Checkout..." : "Upgrade to Pro"}
-                            </button>
+                            <GoProButton />
                         </div>
                     ) : null}
 

@@ -9,6 +9,7 @@ import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
 import GoProButton from "@/components/GoProButton";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 type Mode = "first" | "range" | "all";
 
@@ -16,7 +17,6 @@ type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
-    isPro?: boolean;
 };
 
 const LANGS = [
@@ -111,13 +111,11 @@ async function ensurePdfWorker() {
     const workerUrl = "/pdf.worker.min.mjs";
     (pdfjs as any).GlobalWorkerOptions.workerSrc = workerUrl;
 
-    // If worker isn't reachable, we will still try no-worker fallback later.
     try {
         const res = await fetch(workerUrl, { cache: "no-store" });
         if (!res.ok) throw new Error(`Worker fetch failed: ${res.status} ${res.statusText}`);
     } catch (err) {
         console.error("PDF worker not reachable:", err);
-        // Don't throw here—fallback loadPdfDocument() will try disableWorker.
     }
 
     pdfWorkerReady = true;
@@ -183,6 +181,8 @@ export default function PdfOcrToDocxTool() {
     const [mode, setMode] = useState<Mode>("first");
     const [start, setStart] = useState("1");
     const [end, setEnd] = useState("1");
+
+    const TOOL_ID = "pdf-ocr-to-docx";
     const TOOL_KEY = "pdf-ocr-to-docx";
 
     const [lang, setLang] = useState("eng");
@@ -195,13 +195,12 @@ export default function PdfOcrToDocxTool() {
     const [pageProgress, setPageProgress] = useState(0);
     const [overallProgress, setOverallProgress] = useState(0);
 
-    // Usage UI
+    // ✅ Billing truth (single source of PRO)
+    const { billingLoaded, isPro } = useBillingStatus();
+
+    // ✅ Free-user usage UI only
     const [freeUsed, setFreeUsed] = useState(false);
     const [freeRemaining, setFreeRemaining] = useState(0);
-    const [isPro, setIsPro] = useState(false);
-
-    // Per-tool id (must match your usage route key)
-    const TOOL_ID = "pdf-ocr-to-docx";
 
     async function getUsage(): Promise<UsageJson> {
         const res = await fetch(`/api/usage/${TOOL_ID}`, {
@@ -233,11 +232,13 @@ export default function PdfOcrToDocxTool() {
     }
 
     async function refreshUsageUI() {
+        // only meaningful for FREE users
+        if (billingLoaded && isPro) return;
+
         try {
             const j = await getUsage();
             setFreeUsed(Boolean(j.freeUsed));
             setFreeRemaining(Number(j.freeRemaining ?? 0));
-            setIsPro(Boolean(j.isPro));
         } catch {
             // ignore
         }
@@ -246,7 +247,7 @@ export default function PdfOcrToDocxTool() {
     useEffect(() => {
         refreshUsageUI();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [billingLoaded, isPro]);
 
     // MVP guardrails
     const MAX_ALL_PAGES = 10;
@@ -315,21 +316,24 @@ export default function PdfOcrToDocxTool() {
             return;
         }
 
-        // ✅ Preflight usage check (block early, Pro bypass happens via isPro flag)
-        try {
-            setMsg("Checking usage...");
-            const usage = await getUsage();
-            setFreeUsed(Boolean(usage.freeUsed));
-            setFreeRemaining(Number(usage.freeRemaining ?? 0));
-            setIsPro(Boolean(usage.isPro));
+        const pro = billingLoaded && isPro;
 
-            if (!usage.isPro && usage.freeRemaining <= 0) {
-                setMsg("Free usage limit reached. Upgrade to Pro to continue using OCR PDF → DOCX.");
+        // ✅ Preflight usage check ONLY for FREE users
+        if (!pro) {
+            try {
+                setMsg("Checking usage...");
+                const usage = await getUsage();
+                setFreeUsed(Boolean(usage.freeUsed));
+                setFreeRemaining(Number(usage.freeRemaining ?? 0));
+
+                if (usage.freeRemaining <= 0) {
+                    setMsg("Free usage limit reached. Upgrade to Pro to continue using OCR PDF → DOCX.");
+                    return;
+                }
+            } catch (e: any) {
+                setMsg(e?.message || "Unable to check usage right now.");
                 return;
             }
-        } catch (e: any) {
-            setMsg(e?.message || "Unable to check usage right now.");
-            return;
         }
 
         const dpiNum = parseInt(dpi || "200", 10);
@@ -486,13 +490,15 @@ export default function PdfOcrToDocxTool() {
             const outName = `${base}_OCR_${lang}.docx`;
             saveAs(blob, outName);
 
-            // ✅ Burn usage ONLY after success (don’t block download if burn fails)
-            try {
-                await burnUsage();
-            } catch (burnErr) {
-                console.error("Usage burn failed:", burnErr);
+            // ✅ Burn usage ONLY if FREE (do not block download if burn fails)
+            if (!pro) {
+                try {
+                    await burnUsage();
+                } catch (burnErr) {
+                    console.error("Usage burn failed:", burnErr);
+                }
+                await refreshUsageUI();
             }
-            await refreshUsageUI();
 
             setMsg(`Done ✅ Download started: ${outName}`);
             setPageProgress(100);
@@ -504,7 +510,8 @@ export default function PdfOcrToDocxTool() {
         }
     }
 
-    const locked = !isPro && freeRemaining <= 0;
+    const pro = billingLoaded && isPro;
+    const locked = billingLoaded && !isPro && freeRemaining <= 0;
 
     return (
         <ToolCard
@@ -523,14 +530,22 @@ export default function PdfOcrToDocxTool() {
                 />
 
                 <div className="rounded-xl border bg-white p-4">
-                    {/* Usage panel */}
+                    {/* ✅ Access panel */}
                     <div className="mb-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
-                        <div className="font-semibold">Usage (this tool)</div>
-                        <div className="mt-1 text-xs text-gray-700">
-                            Pro: <span className="font-semibold">{isPro ? "Yes" : "No"}</span> • Free used:{" "}
-                            <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span> • Free remaining:{" "}
-                            <span className="font-semibold">{freeRemaining}</span>
-                        </div>
+                        <div className="font-semibold">Access</div>
+                        {!billingLoaded ? (
+                            <div className="mt-1 text-xs text-gray-700">Checking subscription…</div>
+                        ) : pro ? (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        ) : (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">FREE</span> • Free used:{" "}
+                                <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span> • Free remaining:{" "}
+                                <span className="font-semibold">{freeRemaining}</span>
+                            </div>
+                        )}
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -647,20 +662,21 @@ export default function PdfOcrToDocxTool() {
                         </div>
                     ) : null}
 
-                    {/* Main action */}
                     <button
                         className="mt-5 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
                         onClick={runOcr}
-                        disabled={!file || busy || locked}
-                        title={locked ? "Free usage limit reached" : undefined}
+                        disabled={!file || busy || (!pro && locked)}
+                        title={!pro && locked ? "Free usage limit reached" : undefined}
                     >
-                        {busy ? "Running OCR..." : locked ? "Locked (upgrade)" : "OCR → DOCX & Download"}
+                        {busy ? "Running OCR..." : !pro && locked ? "Locked (upgrade)" : "OCR → DOCX & Download"}
                     </button>
 
-                    {/* Upgrade CTA only when locked */}
-                    {locked ? (
+                    {/* ✅ Upgrade CTA only for FREE users who are locked (never show for PRO) */}
+                    {!pro && locked ? (
                         <div className="mt-4 rounded-xl border p-4 text-center">
-                            <p className="mb-2 text-sm font-medium">{TOOL_PRICING_HINTS[TOOL_KEY]}</p>
+                            <p className="mb-2 text-sm font-medium">
+                                {TOOL_PRICING_HINTS[TOOL_KEY] ?? "Upgrade to Pro for unlimited OCR conversions."}
+                            </p>
                             <p className="mb-3 text-xs text-gray-600">One Pro subscription unlocks all tools.</p>
                             <GoProButton />
                         </div>

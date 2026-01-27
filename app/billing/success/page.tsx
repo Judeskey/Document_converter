@@ -9,7 +9,9 @@ export default function Page() {
             fallback={
                 <div className="mx-auto max-w-xl p-8">
                     <h1 className="text-2xl font-semibold">Payment success</h1>
-                    <p className="mt-3 text-sm opacity-80">Finalizing your subscription...</p>
+                    <p className="mt-3 text-sm opacity-80">
+                        Finalizing your subscription...
+                    </p>
                 </div>
             }
         >

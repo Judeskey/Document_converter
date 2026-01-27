@@ -8,6 +8,7 @@ import UploadCard from "@/components/UploadCard";
 import GoProButton from "@/components/GoProButton";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 import { TOOL_IDS } from "@/lib/tools/toolIds";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 function clamp(n: number, min: number, max: number) {
     return Math.max(min, Math.min(max, n));
@@ -17,7 +18,6 @@ type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
-    isPro?: boolean;
 };
 
 async function readErrorMessage(res: Response) {
@@ -56,15 +56,19 @@ export default function PdfSplitTool() {
 
     // ✅ Canonical ids
     const TOOL_ID = TOOL_IDS.pdfSplit; // must match /api/usage/[tool]
-    const TOOL_KEY = TOOL_ID; // pricing hint key aligned with tool id
+    const TOOL_KEY = TOOL_ID; // pricing hints key aligned with tool id
 
     const [splitTotalPages, setSplitTotalPages] = useState<number | null>(null);
     const [splitBusy, setSplitBusy] = useState(false);
     const [splitMsg, setSplitMsg] = useState("");
 
-    // ✅ unified server-truth gating
+    // ✅ FREE gating UI only
     const [blocked, setBlocked] = useState(false);
     const [gateBusy, setGateBusy] = useState(false);
+
+    // ✅ Billing truth (single source)
+    const { billingLoaded, isPro } = useBillingStatus();
+    const pro = billingLoaded && isPro;
 
     const fileLabel = useMemo(() => {
         if (!splitFile) return "No PDF selected";
@@ -117,10 +121,10 @@ export default function PdfSplitTool() {
     const pickFirstFile = useCallback((input: any): File | null => {
         if (!input) return null;
         if (Array.isArray(input)) return input[0] ?? null;
-        if (input instanceof File) return input;
-        if (input instanceof FileList) return input[0] ?? null;
+        if (typeof File !== "undefined" && input instanceof File) return input;
+        if (typeof FileList !== "undefined" && input instanceof FileList) return input[0] ?? null;
         const files = input?.target?.files;
-        if (files instanceof FileList) return files[0] ?? null;
+        if (typeof FileList !== "undefined" && files instanceof FileList) return files[0] ?? null;
         return null;
     }, []);
 
@@ -161,15 +165,23 @@ export default function PdfSplitTool() {
         }
     }
 
-    async function checkAccess(): Promise<boolean> {
+    async function checkAccessFreeOnly(): Promise<boolean> {
+        // ✅ PRO short-circuit
+        if (pro) return true;
+
         setGateBusy(true);
+        setSplitMsg("");
+        setBlocked(false);
+
         try {
             const usage = await getUsage();
-            const isPro = Boolean(usage.isPro);
             const freeRemaining = Number(usage.freeRemaining ?? 0);
 
-            const allowed = isPro || freeRemaining > 0;
-            if (!allowed) setBlocked(true);
+            const allowed = freeRemaining > 0;
+            if (!allowed) {
+                setBlocked(true);
+                setSplitMsg("Free trial used for this tool. Upgrade to Pro to continue.");
+            }
             return allowed;
         } catch (e: any) {
             setSplitMsg(e?.message || "Unable to check access right now.");
@@ -189,7 +201,7 @@ export default function PdfSplitTool() {
             return;
         }
 
-        const allowed = await checkAccess();
+        const allowed = await checkAccessFreeOnly();
         if (!allowed) return;
 
         const total = splitTotalPages ?? 0;
@@ -213,12 +225,13 @@ export default function PdfSplitTool() {
 
                 await downloadFromResponse(res, "split.zip");
 
-                // ✅ burn only after success (best-effort)
-                try {
-                    const usage = await getUsage();
-                    if (!usage.isPro) await burnUsage();
-                } catch {
-                    // ignore burn errors
+                // ✅ burn only for FREE users (best-effort, never block download)
+                if (!pro) {
+                    try {
+                        await burnUsage();
+                    } catch {
+                        // ignore burn errors
+                    }
                 }
 
                 setSplitMsg("Split ✅ ZIP download started.");
@@ -250,12 +263,13 @@ export default function PdfSplitTool() {
 
             await downloadFromResponse(res, "split.pdf");
 
-            // ✅ burn only after success (best-effort)
-            try {
-                const usage = await getUsage();
-                if (!usage.isPro) await burnUsage();
-            } catch {
-                // ignore burn errors
+            // ✅ burn only for FREE users (best-effort, never block download)
+            if (!pro) {
+                try {
+                    await burnUsage();
+                } catch {
+                    // ignore burn errors
+                }
             }
 
             setSplitMsg("Split ✅ Download started.");
@@ -286,6 +300,22 @@ export default function PdfSplitTool() {
                 />
 
                 <div className="rounded-2xl border bg-white p-5">
+                    {/* Optional Access banner (helps debugging) */}
+                    <div className="mb-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
+                        <div className="font-semibold">Access</div>
+                        {!billingLoaded ? (
+                            <div className="mt-1 text-xs text-gray-700">Checking subscription…</div>
+                        ) : pro ? (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        ) : (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">FREE</span> (limited)
+                            </div>
+                        )}
+                    </div>
+
                     {/* ✅ Split controls */}
                     <div className="grid gap-3 sm:grid-cols-3">
                         <div>
@@ -362,7 +392,6 @@ export default function PdfSplitTool() {
                         )}
                     </div>
 
-
                     <button
                         className="mt-4 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
                         onClick={splitPdf}
@@ -371,10 +400,12 @@ export default function PdfSplitTool() {
                         {splitBusy ? "Splitting..." : gateBusy ? "Checking access..." : "Split & Download"}
                     </button>
 
-                    {blocked && (
+                    {/* ✅ Upgrade CTA only for FREE users who are blocked */}
+                    {!pro && blocked && (
                         <div className="mt-4 rounded-xl border p-4 text-center">
                             <p className="mb-2 text-sm font-medium">
-                                {TOOL_PRICING_HINTS[TOOL_KEY] ?? "Free usage for this tool is used up. Upgrade to Pro to continue."}
+                                {TOOL_PRICING_HINTS[TOOL_KEY] ??
+                                    "Free usage for this tool is used up. Upgrade to Pro to continue."}
                             </p>
                             <p className="mb-3 text-xs text-gray-600">One subscription unlocks all tools.</p>
                             <GoProButton />

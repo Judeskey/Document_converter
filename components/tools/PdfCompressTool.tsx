@@ -6,16 +6,12 @@ import ToolCard from "@/components/ToolCard";
 import UploadCard from "@/components/UploadCard";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 import GoProButton from "@/components/GoProButton";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
-};
-
-type BillingJson = {
-    signedIn: boolean;
-    isPro: boolean;
 };
 
 function fmtBytes(bytes: number) {
@@ -52,29 +48,27 @@ async function readErrorMessage(res: Response) {
 }
 
 export default function PdfCompressTool() {
+    const TOOL_KEY = "pdf-compress";
+    const TOOL_ID = "pdf-compress"; // must match /api/usage/[tool]
+
     const [file, setFile] = useState<File | null>(null);
     const [mode, setMode] = useState<CompressMode>("lossless");
     const [preset, setPreset] = useState<StrongPreset>("balanced");
     const [busy, setBusy] = useState(false);
 
-    const TOOL_KEY = "pdf-compress";
-    const TOOL_ID = "pdf-compress"; // must match /api/usage/[tool]
-
     const [progress, setProgress] = useState<{ page: number; total: number; stage: string } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [outSize, setOutSize] = useState<number | null>(null);
 
-    // ✅ Usage UI
+    // ✅ Usage UI (FREE users)
     const [freeUsed, setFreeUsed] = useState(false);
     const [freeRemaining, setFreeRemaining] = useState(0);
 
-    // ✅ Billing truth
-    const [signedIn, setSignedIn] = useState(false);
-    const [isPro, setIsPro] = useState(false);
+    // ✅ Single source of truth for PRO
+    const { billingLoaded, isPro: isProUser } = useBillingStatus();
 
-    // ✅ Upgrade CTA state
+    // ✅ Upgrade CTA state (free users only)
     const [upgradeRequired, setUpgradeRequired] = useState(false);
-    const [checkoutBusy, setCheckoutBusy] = useState(false);
 
     const MAX_MB = 50;
 
@@ -87,8 +81,7 @@ export default function PdfCompressTool() {
         });
 
         if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(text || `Usage check failed (${res.status})`);
+            throw new Error(await readErrorMessage(res));
         }
 
         return (await res.json()) as UsageJson;
@@ -102,8 +95,7 @@ export default function PdfCompressTool() {
         });
 
         if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(text || `Usage burn failed (${res.status})`);
+            throw new Error(await readErrorMessage(res));
         }
     }
 
@@ -117,20 +109,8 @@ export default function PdfCompressTool() {
         }
     }
 
-    async function refreshBilling() {
-        try {
-            const r = await fetch("/api/billing/me", { cache: "no-store" });
-            const j = (await r.json().catch(() => null)) as BillingJson | null;
-            setSignedIn(Boolean(j?.signedIn));
-            setIsPro(Boolean(j?.isPro));
-        } catch {
-            // ignore
-        }
-    }
-
     useEffect(() => {
         refreshUsageUI();
-        refreshBilling();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -146,24 +126,9 @@ export default function PdfCompressTool() {
         return `${file.name} • ${fmtBytes(file.size)}`;
     }, [file]);
 
-    // ✅ Locked only if NOT pro and freeRemaining <= 0
-    const locked = !isPro && freeRemaining <= 0;
-
-    async function startCheckout() {
-        setCheckoutBusy(true);
-        setError(null);
-        try {
-            const res = await fetch("/api/billing/checkout", { method: "POST" });
-            if (!res.ok) throw new Error(await readErrorMessage(res));
-            const j = (await res.json().catch(() => null)) as { url?: string } | null;
-            if (!j?.url) throw new Error("Checkout URL not returned.");
-            window.location.href = j.url;
-        } catch (e: any) {
-            setError(e?.message || "Unable to start checkout.");
-        } finally {
-            setCheckoutBusy(false);
-        }
-    }
+    // ✅ IMPORTANT: Do NOT lock while billing is still loading
+    // - If billing not loaded yet: allow click, we’ll decide inside onCompress()
+    const locked = billingLoaded && !isProUser && freeRemaining <= 0;
 
     async function onCompress() {
         if (!file) return;
@@ -172,27 +137,23 @@ export default function PdfCompressTool() {
         setOutSize(null);
         setUpgradeRequired(false);
 
-        // Refresh billing status in case user just came back from checkout
-        await refreshBilling();
+        // ✅ PRO short-circuit: never check usage
+        if (!(billingLoaded && isProUser)) {
+            // FREE preflight usage check
+            try {
+                const usage = await getUsage();
+                setFreeUsed(Boolean(usage.freeUsed));
+                setFreeRemaining(Number(usage.freeRemaining ?? 0));
 
-        // ✅ Preflight: check usage BEFORE heavy work (Pro bypasses lock)
-        let usage: UsageJson | null = null;
-        try {
-            usage = await getUsage();
-            setFreeUsed(Boolean(usage.freeUsed));
-            setFreeRemaining(Number(usage.freeRemaining ?? 0));
-        } catch (e: any) {
-            // If usage endpoint fails, still allow Pro to proceed
-            if (!isPro) {
+                if (Number(usage.freeRemaining ?? 0) <= 0) {
+                    setUpgradeRequired(true);
+                    setError("Free trial used for this tool. Please upgrade to Pro to continue.");
+                    return;
+                }
+            } catch (e: any) {
                 setError(e?.message || "Unable to check usage right now.");
                 return;
             }
-        }
-
-        if (!isPro && usage && usage.freeRemaining <= 0) {
-            setUpgradeRequired(true);
-            setError("Free trial used for this tool. Please upgrade to Pro to continue.");
-            return;
         }
 
         setBusy(true);
@@ -214,8 +175,8 @@ export default function PdfCompressTool() {
             const suffix = mode === "lossless" ? "optimized" : `compressed-${preset}`;
             downloadBlob(blob, `${base}-${suffix}.pdf`);
 
-            // ✅ Burn usage only if NOT Pro (do not block download if burn fails)
-            if (!isPro) {
+            // ✅ Burn usage only if FREE
+            if (!(billingLoaded && isProUser)) {
                 try {
                     await burnUsage();
                 } catch (burnErr) {
@@ -231,6 +192,11 @@ export default function PdfCompressTool() {
         }
     }
 
+    // ✅ UI rules
+    const showPro = billingLoaded && isProUser;
+    const showFreeUsage = billingLoaded && !isProUser;
+    const showUpgradeCard = billingLoaded && !isProUser && (locked || upgradeRequired);
+
     return (
         <ToolCard title="Compress PDF" subtitle="Reduce PDF size to meet upload limits.">
             <div className="space-y-4">
@@ -245,6 +211,7 @@ export default function PdfCompressTool() {
                         setFile(f);
                         setOutSize(null);
                         setError(null);
+                        setProgress(null);
                         setUpgradeRequired(false);
                     }}
                     onClear={() => {
@@ -285,9 +252,7 @@ export default function PdfCompressTool() {
                                     <option value="smallest">Smallest</option>
                                     <option value="best">Best quality</option>
                                 </select>
-                                <p className="mt-1 text-xs text-gray-600">
-                                    Guardrail: Strong compression supports up to 50 pages.
-                                </p>
+                                <p className="mt-1 text-xs text-gray-600">Guardrail: Strong compression supports up to 50 pages.</p>
                             </div>
                         ) : (
                             <div className="rounded-xl border bg-gray-50 p-3 text-sm text-gray-700">
@@ -300,23 +265,32 @@ export default function PdfCompressTool() {
                         )}
                     </div>
 
-                    {/* ✅ Status panel */}
+                    {/* ✅ Status */}
                     <div className="mt-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
                         <div className="font-semibold">Access</div>
-                        <div className="mt-1 text-xs text-gray-700">
-                            Signed in: <span className="font-semibold">{signedIn ? "Yes" : "No"}</span> • Plan:{" "}
-                            <span className="font-semibold">{isPro ? "PRO" : "FREE"}</span>
-                        </div>
+                        {!billingLoaded ? (
+                            <div className="mt-1 text-xs text-gray-700">Checking subscription…</div>
+                        ) : showPro ? (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">PRO</span> (unlimited)
+                            </div>
+                        ) : (
+                            <div className="mt-1 text-xs text-gray-700">
+                                Plan: <span className="font-semibold">FREE</span>
+                            </div>
+                        )}
                     </div>
 
-                    {/* Usage panel */}
-                    <div className="mt-3 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
-                        <div className="font-semibold">Usage (this tool)</div>
-                        <div className="mt-1 text-xs text-gray-700">
-                            Free used: <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span> • Free remaining:{" "}
-                            <span className="font-semibold">{freeRemaining}</span>
+                    {/* ✅ Usage (FREE only) */}
+                    {showFreeUsage ? (
+                        <div className="mt-3 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
+                            <div className="font-semibold">Usage (this tool)</div>
+                            <div className="mt-1 text-xs text-gray-700">
+                                Free used: <span className="font-semibold">{freeUsed ? "Yes" : "No"}</span> • Free remaining:{" "}
+                                <span className="font-semibold">{freeRemaining}</span>
+                            </div>
                         </div>
-                    </div>
+                    ) : null}
 
                     {progress ? (
                         <div className="mt-4 rounded-xl border bg-gray-50 p-3 text-sm text-gray-800">
@@ -354,27 +328,14 @@ export default function PdfCompressTool() {
                         {busy ? "Compressing..." : locked ? "Locked (upgrade)" : "Compress & Download"}
                     </button>
 
-                    {/* ✅ Always show GoPro when locked OR when upgradeRequired */}
-                    {(locked || upgradeRequired) ? (
+                    {/* ✅ Upgrade CTA: never for PRO */}
+                    {showUpgradeCard ? (
                         <div className="mt-4 rounded-xl border p-4 text-center">
                             <p className="mb-2 text-sm font-medium">
                                 {TOOL_PRICING_HINTS[TOOL_KEY] || "Free usage limit reached. Upgrade to Pro to continue."}
                             </p>
                             <p className="mb-3 text-xs text-gray-600">One Pro subscription unlocks all tools.</p>
-
-                            {/* Use your existing GoProButton (simple + consistent across tools) */}
                             <GoProButton />
-
-                            {/* Optional: if you prefer the custom checkout button instead of GoProButton,
-                  replace <GoProButton /> with this:
-                  <button
-                    className="mt-3 w-full rounded-xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
-                    onClick={startCheckout}
-                    disabled={checkoutBusy || busy}
-                  >
-                    {checkoutBusy ? "Redirecting to checkout..." : "Go Pro (Upgrade)"}
-                  </button>
-              */}
                         </div>
                     ) : null}
 

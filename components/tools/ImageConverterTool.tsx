@@ -6,6 +6,7 @@ import UploadCard from "@/components/UploadCard";
 import GoProButton from "@/components/GoProButton";
 import { TOOL_PRICING_HINTS } from "@/lib/tools/pricingHints";
 import { TOOL_IDS } from "@/lib/tools/toolIds";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 
 type OutFmt = "png" | "jpg" | "webp" | "avif";
 
@@ -13,8 +14,14 @@ type UsageJson = {
     tool: string;
     freeUsed: boolean;
     freeRemaining: number;
-    isPro?: boolean;
 };
+
+function isProFromBillingUser(u: any) {
+    if (!u) return false;
+    const plan = String(u.plan || "").toUpperCase();
+    const status = String(u.subscriptionStatus || "").toLowerCase();
+    return plan === "PRO" || status === "active" || status === "trialing";
+}
 
 async function readErrorMessage(res: Response) {
     const ct = res.headers.get("content-type") || "";
@@ -52,11 +59,13 @@ export default function ImageConverterTool() {
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<string>("");
 
-    // ✅ gating/usage UI
+    // ✅ gating/usage UI (FREE users only)
     const [blocked, setBlocked] = useState(false);
     const [gateBusy, setGateBusy] = useState(false);
     const [freeRemaining, setFreeRemaining] = useState<number>(0);
-    const [isPro, setIsPro] = useState<boolean>(false);
+
+    // ✅ SINGLE source of truth for PRO on the client
+    const { billingLoaded, isPro: isProUser } = useBillingStatus();
 
     function onPick(f: File | null) {
         setFile(f);
@@ -121,15 +130,29 @@ export default function ImageConverterTool() {
         setBlocked(false);
 
         try {
-            const usage = await getUsage();
-            const pro = Boolean(usage.isPro);
-            const remaining = Number(usage.freeRemaining ?? 0);
+            // ✅ 1) PRO short-circuit: unlimited, no freeRemaining logic
+            if (billingLoaded && isProUser) {
+                return true;
+            }
 
-            setIsPro(pro);
+            // ✅ 1b) If billing not loaded yet, do a fast one-shot check to avoid “PRO but blocked”
+            if (!billingLoaded) {
+                try {
+                    const meRes = await fetch("/api/billing/me", { cache: "no-store" });
+                    const meData = await meRes.json().catch(() => null);
+                    const proNow = meRes.ok && meData?.ok && isProFromBillingUser(meData.user);
+                    if (proNow) return true;
+                } catch {
+                    // ignore, fall back to free gating
+                }
+            }
+
+            // ✅ 2) FREE gating only
+            const usage = await getUsage();
+            const remaining = Number(usage.freeRemaining ?? 0);
             setFreeRemaining(remaining);
 
-            // ✅ allowed if Pro OR remaining > 0
-            if (pro || remaining > 0) return true;
+            if (remaining > 0) return true;
 
             setBlocked(true);
             setMsg("Free trial used for this tool. Upgrade to Pro to continue.");
@@ -170,16 +193,12 @@ export default function ImageConverterTool() {
             // ✅ download first (don’t block download if burn fails)
             await downloadFromResponse(res, `converted.${out}`);
 
-            // ✅ burn usage ONLY if not Pro
-            if (!isPro) {
+            // ✅ burn usage ONLY if not PRO
+            if (!(billingLoaded && isProUser)) {
                 try {
                     await burnUsage();
-                    // refresh UI counters (best-effort)
                     const u2 = await getUsage().catch(() => null);
-                    if (u2) {
-                        setIsPro(Boolean(u2.isPro));
-                        setFreeRemaining(Number(u2.freeRemaining ?? 0));
-                    }
+                    if (u2) setFreeRemaining(Number(u2.freeRemaining ?? 0));
                 } catch {
                     // ignore burn failure
                 }
@@ -192,6 +211,11 @@ export default function ImageConverterTool() {
             setBusy(false);
         }
     }
+
+    // ✅ UI decisions
+    const showProBanner = billingLoaded && isProUser;
+    const showFreeRemaining = billingLoaded && !isProUser;
+    const showUpgradeCard = billingLoaded && !isProUser && (blocked || freeRemaining <= 0);
 
     return (
         <ToolCard
@@ -235,18 +259,21 @@ export default function ImageConverterTool() {
                             {busy ? "Converting..." : gateBusy ? "Checking access..." : "Convert"}
                         </button>
 
-                        {/* Optional: show remaining uses for free users */}
-                        {!isPro ? (
-                            <div className="mt-3 text-xs text-gray-600">
-                                Free remaining: <span className="font-semibold">{freeRemaining}</span>
-                            </div>
-                        ) : (
+                        {/* ✅ Status line */}
+                        {!billingLoaded ? (
+                            <div className="mt-3 text-xs text-gray-600">Checking subscription…</div>
+                        ) : showProBanner ? (
                             <div className="mt-3 text-xs text-gray-600">
                                 Plan: <span className="font-semibold">PRO</span> (unlimited)
                             </div>
-                        )}
+                        ) : showFreeRemaining ? (
+                            <div className="mt-3 text-xs text-gray-600">
+                                Free remaining: <span className="font-semibold">{freeRemaining}</span>
+                            </div>
+                        ) : null}
 
-                        {blocked ? (
+                        {/* ✅ Upgrade card: ONLY for free users, never for PRO */}
+                        {showUpgradeCard ? (
                             <div className="mt-4 rounded-xl border p-4 text-center">
                                 <p className="mb-2 text-sm font-medium">
                                     {TOOL_PRICING_HINTS[TOOL_KEY] ?? "Upgrade to Pro to unlock unlimited usage."}
@@ -261,9 +288,7 @@ export default function ImageConverterTool() {
 
                     <div className="rounded-2xl border bg-white p-5">
                         <div className="text-sm font-semibold text-gray-900">Tip</div>
-                        <div className="mt-2 text-sm text-gray-700">
-                            Pro users get unlimited conversions across all tools.
-                        </div>
+                        <div className="mt-2 text-sm text-gray-700">Pro users get unlimited conversions across all tools.</div>
                     </div>
                 </div>
             </div>
