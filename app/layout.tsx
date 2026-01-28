@@ -5,7 +5,8 @@ import Providers from "./providers";
 import SiteHeader from "@/components/SiteHeader";
 import AuthButtons from "@/components/AuthButtons";
 import GoProButton from "@/components/GoProButton";
-
+import SiteFooter from "@/components/SiteFooter";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://docconvertor.com";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -17,14 +18,30 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://docconvertor.com"),
+  metadataBase: new URL(SITE_URL),
   title: {
-    default: "DocConvert – Free Online Document & Image Converter",
-    template: "%s | DocConvert",
+    default: "DocConvertor — Free Online Document & Image Tools",
+    template: "%s | DocConvertor",
   },
   description:
-    "Convert PDFs, images, and documents online for free. Fast, secure document conversion with OCR, compression, and merge tools. No signup required.",
-  applicationName: "DocConvert",
+    "Convert, merge, split, compress, and OCR documents online. Fast, secure, and simple.",
+  alternates: {
+    canonical: SITE_URL,
+  },
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    siteName: "DocConvertor",
+    title: "DocConvertor — Free Online Document & Image Tools",
+    description:
+      "Convert, merge, split, compress, and OCR documents online. Fast, secure, and simple.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "DocConvertor — Free Online Document & Image Tools",
+    description:
+      "Convert, merge, split, compress, and OCR documents online. Fast, secure, and simple.",
+  },
 };
 
 export default function RootLayout({
@@ -49,6 +66,7 @@ export default function RootLayout({
           />
           {children}
         </Providers>
+        <SiteFooter />
       </body>
     </html>
   );
