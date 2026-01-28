@@ -1,4 +1,5 @@
 import Link from "next/link";
+import TrustNotice from "@/components/TrustNotice";
 
 type Props = {
     title: string;
@@ -13,11 +14,15 @@ export default function ToolPageHeader({ title, description }: Props) {
                     <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
                         {title}
                     </h1>
+
                     {description ? (
                         <p className="mt-2 text-sm text-gray-600 sm:text-base">
                             {description}
                         </p>
                     ) : null}
+
+                    {/* Global trust message (shows on every tool page that uses ToolPageHeader) */}
+                    <TrustNotice />
                 </div>
 
                 <div className="flex items-center gap-2">

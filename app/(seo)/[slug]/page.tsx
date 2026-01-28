@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import EmbedPdfMergeTool from "@/components/seo/EmbedPdfMergeTool";
+import TrustNotice from "@/components/TrustNotice";
+
 
 // ---------- SEO DATA (MERGE PDF PILOT) ----------
 type SeoPage = {
@@ -263,7 +265,7 @@ export default async function ProgrammaticSeoPage({
                     <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-600">
                         {page.intro}
                     </p>
-
+                    <TrustNotice />
                     <div className="mt-6 flex flex-col gap-3 sm:flex-row">
                         <Link
                             href={page.primaryCtaHref}
@@ -281,6 +283,9 @@ export default async function ProgrammaticSeoPage({
                             </Link>
                         ) : null}
                     </div>
+                    <p className="mt-3 text-xs text-neutral-500">
+                        Works entirely in your browser — no software downloads or installations.
+                    </p>
 
                     <ul className="mt-6 grid gap-2 text-sm text-neutral-700 sm:grid-cols-2">
                         {page.bullets.map((b) => (
