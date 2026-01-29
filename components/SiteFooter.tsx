@@ -1,237 +1,134 @@
 import Link from "next/link";
 
-const YEAR = new Date().getFullYear();
-
-const BADGES = [
-    { label: "No installs", sub: "Runs in browser" },
-    { label: "Secure processing", sub: "Privacy-first" },
-    { label: "Fast results", sub: "Optimized workflow" },
-    { label: "Works everywhere", sub: "Mobile + desktop" },
-];
-
-const TOOL_LINKS = [
-    { href: "/tools", label: "All tools" },
-    { href: "/pdf/merge", label: "Merge PDF" },
-    { href: "/pdf/split", label: "Split PDF" },
-    { href: "/pdf/compress", label: "Compress PDF" },
-    { href: "/pdf/to-word", label: "PDF to Word" },
-    { href: "/pdf/ocr-to-word", label: "OCR PDF to Word" },
-    { href: "/pdf/to-image", label: "PDF to Image" },
-    { href: "/image/convert", label: "Image Converter" },
-];
-
-const GUIDES = [
-    { href: "/guides", label: "All guides" },
-    { href: "/guides/pdf-to-word", label: "PDF to Word guide" },
-    { href: "/guides/ocr-pdf-to-word", label: "OCR PDF to Word guide" },
-    { href: "/guides/merge-pdf", label: "Merge PDF guide" },
-    { href: "/guides/split-pdf", label: "Split PDF guide" },
-];
-
-const POPULAR = [
-    { href: "/image/png-to-jpg", label: "PNG to JPG" },
-    { href: "/pdf-to-word/pdf-to-docx", label: "PDF to DOCX" },
-    { href: "/compress/reduce-pdf-size", label: "Reduce PDF size" },
-    { href: "/split/extract-pages-from-pdf", label: "Extract PDF pages" },
-];
-
-const COMPANY = [
-    { href: "/pricing", label: "Pricing" },
-    { href: "/faq", label: "FAQ" },
-    { href: "/about", label: "About" },
-    { href: "/privacy", label: "Privacy policy" },
-    { href: "/terms", label: "Terms" },
-];
-
-function FooterLink({ href, label }: { href: string; label: string }) {
-    return (
-        <Link
-            href={href}
-            className="text-sm text-neutral-600 hover:text-neutral-900 hover:underline underline-offset-4"
-        >
-            {label}
-        </Link>
-    );
-}
-
 export default function SiteFooter() {
     return (
-        <footer className="relative mt-16 border-t border-neutral-200 bg-white">
-            {/* Soft gradient top accent */}
-            <div className="h-px w-full bg-gradient-to-r from-transparent via-neutral-200 to-transparent" />
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-neutral-50 to-transparent" />
-
-            <div className="mx-auto max-w-6xl px-4 py-12">
-                {/* Top: Brand + CTA */}
-                <div className="grid gap-8 lg:grid-cols-12">
-                    <div className="lg:col-span-5">
-                        <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-neutral-200 bg-neutral-50 shadow-sm">
-                                {/* Simple “spark” icon */}
-                                <span className="text-lg">✨</span>
+        <footer className="border-t bg-white">
+            <div className="mx-auto max-w-6xl px-4 py-14">
+                {/* Top section */}
+                <div className="grid gap-10 lg:grid-cols-2">
+                    {/* Brand + trust */}
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-gray-900 to-gray-700 text-white font-bold">
+                                D
                             </div>
-
-                            <div>
-                                <div className="text-base font-semibold tracking-tight text-neutral-900">
-                                    DocConvertor
-                                </div>
-                                <div className="text-sm text-neutral-600">
-                                    Fast, secure document tools — merge, split, compress, OCR, and convert.
-                                </div>
-                            </div>
+                            <span className="text-sm font-semibold text-gray-900">
+                                DocConvertor
+                            </span>
                         </div>
 
-                        <p className="mt-4 text-sm leading-6 text-neutral-600">
-                            No software installation required. Your files are processed securely to complete your request
-                            and are not kept permanently.
+                        <p className="mt-4 max-w-md text-sm text-gray-600">
+                            Fast, secure document tools — merge, split, compress, OCR, and
+                            convert files online.
                         </p>
 
-                        {/* Trust badges */}
-                        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                            {BADGES.map((b) => (
-                                <div
-                                    key={b.label}
-                                    className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4"
-                                >
-                                    <div className="text-sm font-semibold text-neutral-900">{b.label}</div>
-                                    <div className="mt-1 text-xs text-neutral-600">{b.sub}</div>
-                                </div>
-                            ))}
+                        <p className="mt-3 max-w-md text-sm text-gray-600">
+                            No software installation required. Files are processed securely to
+                            complete your request and are not kept permanently.
+                        </p>
+
+                        <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+                            <div className="rounded-xl border px-4 py-3">
+                                <div className="font-semibold text-gray-900">No installs</div>
+                                <div className="text-gray-600">Runs in your browser</div>
+                            </div>
+                            <div className="rounded-xl border px-4 py-3">
+                                <div className="font-semibold text-gray-900">Secure</div>
+                                <div className="text-gray-600">Privacy-first processing</div>
+                            </div>
+                            <div className="rounded-xl border px-4 py-3">
+                                <div className="font-semibold text-gray-900">Fast results</div>
+                                <div className="text-gray-600">Optimized workflow</div>
+                            </div>
+                            <div className="rounded-xl border px-4 py-3">
+                                <div className="font-semibold text-gray-900">Everywhere</div>
+                                <div className="text-gray-600">Desktop & mobile</div>
+                            </div>
                         </div>
                     </div>
 
-                    <div className="lg:col-span-7">
-                        <div className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <div>
-                                    <div className="text-sm font-semibold text-neutral-900">
-                                        Get more done in less time
-                                    </div>
-                                    <div className="mt-1 text-sm text-neutral-600">
-                                        Try Pro for unlimited productivity across all tools.
-                                    </div>
-                                </div>
+                    {/* Conversion block */}
+                    <div className="rounded-3xl border bg-gray-50 p-6">
+                        <h3 className="text-lg font-semibold text-gray-900">
+                            Get more done in less time
+                        </h3>
 
-                                <div className="flex flex-wrap gap-3">
-                                    <Link
-                                        href="/pricing"
-                                        className="inline-flex items-center justify-center rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white hover:opacity-90"
-                                    >
-                                        Go Pro →
-                                    </Link>
-                                    <Link
-                                        href="/tools"
-                                        className="inline-flex items-center justify-center rounded-xl border border-neutral-300 bg-white px-5 py-3 text-sm font-semibold text-neutral-900 hover:bg-neutral-50"
-                                    >
-                                        Browse tools
-                                    </Link>
-                                </div>
-                            </div>
+                        <p className="mt-2 text-sm text-gray-600">
+                            Upgrade to Pro for unlimited usage across all document and image
+                            tools.
+                        </p>
 
-                            {/* “Newsletter” (optional, non-functional placeholder) */}
-                            <div className="mt-6 rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
-                                <div className="text-sm font-semibold text-neutral-900">
-                                    Product updates (optional)
-                                </div>
-                                <div className="mt-1 text-sm text-neutral-600">
-                                    If you ever add email capture later, this spot is ready.
-                                </div>
+                        <div className="mt-5 flex flex-wrap gap-3">
+                            <Link
+                                href="/pricing"
+                                className="rounded-full bg-black px-6 py-2.5 text-sm font-semibold text-white hover:bg-gray-900"
+                            >
+                                Go Pro →
+                            </Link>
 
-                                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                                    <input
-                                        disabled
-                                        placeholder="Email (coming soon)"
-                                        className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-500 shadow-sm outline-none"
-                                    />
-                                    <button
-                                        disabled
-                                        className="rounded-xl border border-neutral-200 bg-white px-5 py-3 text-sm font-semibold text-neutral-400"
-                                    >
-                                        Subscribe
-                                    </button>
-                                </div>
-                            </div>
+                            <Link
+                                href="/tools"
+                                className="rounded-full border px-6 py-2.5 text-sm font-semibold hover:bg-white"
+                            >
+                                Browse tools
+                            </Link>
                         </div>
                     </div>
                 </div>
 
-                {/* Divider */}
-                <div className="my-10 h-px w-full bg-gradient-to-r from-transparent via-neutral-200 to-transparent" />
-
-                {/* Link columns */}
-                <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-12">
-                    <div className="lg:col-span-3">
-                        <div className="text-sm font-semibold text-neutral-900">Tools</div>
-                        <div className="mt-4 grid gap-2">
-                            {TOOL_LINKS.map((l) => (
-                                <FooterLink key={l.href} href={l.href} label={l.label} />
-                            ))}
-                        </div>
+                {/* Links */}
+                <div className="mt-14 grid gap-8 sm:grid-cols-2 md:grid-cols-4 text-sm">
+                    <div>
+                        <div className="font-semibold text-gray-900">Tools</div>
+                        <ul className="mt-3 space-y-2 text-gray-600">
+                            <li><Link href="/tools">All tools</Link></li>
+                            <li><Link href="/pdf/merge">Merge PDF</Link></li>
+                            <li><Link href="/pdf/split">Split PDF</Link></li>
+                            <li><Link href="/pdf/compress">Compress PDF</Link></li>
+                            <li><Link href="/pdf/to-word">PDF to Word</Link></li>
+                        </ul>
                     </div>
 
-                    <div className="lg:col-span-3">
-                        <div className="text-sm font-semibold text-neutral-900">Guides</div>
-                        <div className="mt-4 grid gap-2">
-                            {GUIDES.map((l) => (
-                                <FooterLink key={l.href} href={l.href} label={l.label} />
-                            ))}
-                        </div>
+                    <div>
+                        <div className="font-semibold text-gray-900">Guides</div>
+                        <ul className="mt-3 space-y-2 text-gray-600">
+                            <li><Link href="/guides">All guides</Link></li>
+                            <li><Link href="/guides/pdf-to-word">PDF to Word guide</Link></li>
+                            <li><Link href="/guides/ocr-pdf-to-word">OCR PDF guide</Link></li>
+                            <li><Link href="/guides/merge-pdf">Merge PDF guide</Link></li>
+                            <li><Link href="/guides/split-pdf">Split PDF guide</Link></li>
+                        </ul>
                     </div>
 
-                    <div className="lg:col-span-3">
-                        <div className="text-sm font-semibold text-neutral-900">Popular</div>
-                        <div className="mt-4 grid gap-2">
-                            {POPULAR.map((l) => (
-                                <FooterLink key={l.href} href={l.href} label={l.label} />
-                            ))}
-                        </div>
+                    <div>
+                        <div className="font-semibold text-gray-900">Popular</div>
+                        <ul className="mt-3 space-y-2 text-gray-600">
+                            <li><Link href="/image/png-to-jpg">PNG to JPG</Link></li>
+                            <li><Link href="/pdf-to-word/pdf-to-docx">PDF to DOCX</Link></li>
+                            <li><Link href="/compress/reduce-pdf-size">Reduce PDF size</Link></li>
+                            <li><Link href="/split/extract-pages-from-pdf">Extract pages</Link></li>
+                        </ul>
                     </div>
 
-                    <div className="lg:col-span-3">
-                        <div className="text-sm font-semibold text-neutral-900">Company</div>
-                        <div className="mt-4 grid gap-2">
-                            {COMPANY.map((l) => (
-                                <FooterLink key={l.href} href={l.href} label={l.label} />
-                            ))}
-                        </div>
-
-                        {/* “Mini status” */}
-                        <div className="mt-6 rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
-                            <div className="text-xs font-semibold text-neutral-900">Always improving</div>
-                            <div className="mt-1 text-xs leading-5 text-neutral-600">
-                                New tools + guides added regularly to boost your productivity.
-                            </div>
-                        </div>
+                    <div>
+                        <div className="font-semibold text-gray-900">Company</div>
+                        <ul className="mt-3 space-y-2 text-gray-600">
+                            <li><Link href="/pricing">Pricing</Link></li>
+                            <li><Link href="/faq">FAQ</Link></li>
+                            <li><Link href="/about">About</Link></li>
+                            <li><Link href="/privacy">Privacy Policy</Link></li>
+                            <li><Link href="/terms">Terms</Link></li>
+                        </ul>
                     </div>
                 </div>
 
                 {/* Bottom bar */}
-                <div className="mt-10 flex flex-col gap-4 border-t border-neutral-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="text-xs text-neutral-600">
-                        © {YEAR} DocConvertor. All rights reserved.
+                <div className="mt-10 border-t pt-6 text-xs text-gray-500 flex flex-col sm:flex-row justify-between gap-3">
+                    <div>
+                        © {new Date().getFullYear()} DocConvertor. All rights reserved.
                     </div>
-
-                    <div className="flex flex-wrap items-center gap-3">
-                        <Link
-                            href="/privacy"
-                            className="text-xs text-neutral-600 hover:text-neutral-900 hover:underline underline-offset-4"
-                        >
-                            Privacy
-                        </Link>
-                        <span className="text-neutral-300">•</span>
-                        <Link
-                            href="/terms"
-                            className="text-xs text-neutral-600 hover:text-neutral-900 hover:underline underline-offset-4"
-                        >
-                            Terms
-                        </Link>
-                        <span className="text-neutral-300">•</span>
-                        <Link
-                            href="/faq"
-                            className="text-xs text-neutral-600 hover:text-neutral-900 hover:underline underline-offset-4"
-                        >
-                            Help
-                        </Link>
+                    <div>
+                        Built for speed • Privacy-first • No installations
                     </div>
                 </div>
             </div>
