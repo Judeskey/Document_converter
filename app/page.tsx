@@ -1,7 +1,5 @@
 import Link from "next/link";
 
-
-
 type Tool = {
   title: string;
   desc: string;
@@ -47,7 +45,7 @@ const FEATURED: Tool[] = [
   {
     title: "PDF → Word",
     desc: "Headings, lists, page breaks, basic tables",
-    href: "/pdf/to-doc",
+    href: "/pdf/to-word",
     badge: "Improved",
     gradient: "from-sky-500 to-blue-600",
     icon: "📄",
@@ -55,7 +53,7 @@ const FEATURED: Tool[] = [
   {
     title: "OCR (Scanned PDF)",
     desc: "Scanned PDF → editable Word (DOCX)",
-    href: "/pdf/ocr",
+    href: "/pdf/ocr-to-word",
     badge: "Pro",
     gradient: "from-rose-500 to-red-500",
     icon: "🔎",
@@ -76,14 +74,12 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2">
-            
             <Link
               href="/tools"
               className="inline-flex items-center gap-2 rounded-full bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-black"
             >
               View all tools →
             </Link>
-        
           </div>
         </div>
 
@@ -151,7 +147,7 @@ export default function HomePage() {
                     🗜️ Compress a PDF
                   </Link>
                   <Link
-                    href="/pdf/ocr"
+                    href="/pdf/ocr-to-word"
                     className="rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50"
                   >
                     🔎 OCR a scanned PDF
@@ -228,7 +224,7 @@ export default function HomePage() {
           <div className="font-semibold">Tip</div>
           <div className="mt-1">
             If a PDF looks scanned (no selectable text), use{" "}
-            <Link href="/pdf/ocr" className="underline font-semibold">
+            <Link href="/pdf/ocr-to-word" className="underline font-semibold">
               OCR (Scanned PDF)
             </Link>{" "}
             for best results.
