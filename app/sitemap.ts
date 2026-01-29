@@ -51,6 +51,17 @@ const OCR_TO_WORD_SLUGS = [
     "extract-text-from-scanned-pdf",
 ];
 
+// --- Guides (new) ---
+const GUIDE_SLUGS = [
+    "pdf-to-word",
+    "ocr-pdf-to-word",
+    "merge-pdf",
+    "split-pdf",
+    "compress-pdf",
+    "pdf-to-image",
+    "image-converter",
+];
+
 export default function sitemap(): MetadataRoute.Sitemap {
     const now = new Date();
 
@@ -72,6 +83,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
         "/pdf/compress",
         "/pdf/to-word",
         "/pdf/ocr-to-word",
+
+        // Guides index (new)
+        "/guides",
     ];
 
     const programmaticPages = [
@@ -81,6 +95,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
         ...COMPRESS_SLUGS.map((s) => `/compress/${s}`),
         ...PDF_TO_WORD_SLUGS.map((s) => `/pdf-to-word/${s}`),
         ...OCR_TO_WORD_SLUGS.map((s) => `/pdf-ocr-to-word/${s}`),
+
+        // Guides (new)
+        ...GUIDE_SLUGS.map((s) => `/guides/${s}`),
     ];
 
     const urls = [...staticPages, ...programmaticPages].map((path) => ({
